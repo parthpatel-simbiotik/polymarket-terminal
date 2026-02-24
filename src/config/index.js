@@ -5,6 +5,8 @@ const config = {
   // Wallet
   privateKey: process.env.PRIVATE_KEY,         // EOA private key (for signing only)
   proxyWallet: process.env.PROXY_WALLET_ADDRESS, // Polymarket proxy wallet (deposit USDC here)
+  // 1 = POLY_PROXY (Magic Link / email), 2 = GNOSIS_SAFE (MetaMask etc.). Split/merge in ctf.js require Gnosis Safe.
+  signatureType: parseInt(process.env.SIGNATURE_TYPE || '2', 10),
 
   // Polymarket API (optional, auto-derived if empty)
   clobApiKey: process.env.CLOB_API_KEY || '',

@@ -39,7 +39,7 @@ export async function initClient() {
         config.chainId,
         signer,
         apiCreds,
-        2, // Signature type: 2 = POLY_PROXY (EOA signs on behalf of proxy wallet)
+        config.signatureType, // 1 = POLY_PROXY (Magic Link), 2 = GNOSIS_SAFE (MetaMask etc.)
         config.proxyWallet, // Funder = proxy wallet (deposit USDC.e here)
     );
 

@@ -5,6 +5,9 @@
   "main": "src/index.js",
   "type": "module",
   "scripts": {
+    "create-gnosis-safe": "node scripts/create-gnosis-safe.js",
+    "transfer-to-safe": "node scripts/transfer-usdc-to-safe.js",
+    "send-matic": "node scripts/send-matic.js",
     "start": "node src/index.js",
     "dev": "nodemon --ignore 'data/*.json' src/index.js",
     "mm": "DRY_RUN=false node src/mm.js",
@@ -22,10 +25,13 @@
   "author": "direkturcrypto",
   "license": "ISC",
   "dependencies": {
+    "@polymarket/builder-relayer-client": "^0.0.8",
+    "@polymarket/builder-signing-sdk": "^0.0.8",
     "@polymarket/clob-client": "^4.7.3",
     "blessed": "^0.1.81",
     "dotenv": "^16.4.7",
     "ethers": "^5.8.0",
+    "viem": "^2.21.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {

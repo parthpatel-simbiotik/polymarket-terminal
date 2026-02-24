@@ -43,6 +43,7 @@ const CTF_ABI = [
 const ERC20_ABI = [
     'function approve(address spender, uint256 amount) returns (bool)',
     'function allowance(address owner, address spender) view returns (uint256)',
+    'function transfer(address to, uint256 amount) returns (bool)',
 ];
 
 const ERC1155_ABI = [
@@ -123,7 +124,18 @@ async function _doExecSafeCall(to, data, description = '') {
             const wallet   = getSigner().connect(provider);
             const safe     = new ethers.Contract(config.proxyWallet, SAFE_ABI, wallet);
 
-            const nonce = await safe.nonce();
+            let nonce;
+            try {
+                nonce = await safe.nonce();
+            } catch (nonceErr) {
+                if (nonceErr?.code === 'CALL_EXCEPTION' || nonceErr?.method === 'nonce()') {
+                    throw new Error(
+                        'Proxy at ' + config.proxyWallet + ' is not a Gnosis Safe (e.g. it is a Polymarket Poly Proxy from Magic Link). ' +
+                        'Split/merge/approve require a Gnosis Safe proxy. Use a MetaMask (or similar) wallet for those flows, or set SIGNATURE_TYPE=1 and use this wallet for order placement only.'
+                    );
+                }
+                throw nonceErr;
+            }
 
             // Get the Safe's typed transaction hash
             const txHash = await safe.getTransactionHash(
@@ -193,6 +205,17 @@ async function ensureUsdcApproval(amountWei) {
     const data = iface.encodeFunctionData('approve', [CTF_ADDRESS, ethers.constants.MaxUint256]);
     await execSafeCall(USDC_ADDRESS, data, 'approve USDC → CTF');
     logger.success('MM: USDC approved to CTF contract');
+}
+
+/**
+ * Transfer USDC.e from the configured Safe (proxy wallet) to another address.
+ * Used e.g. to move funds from your main Polymarket Safe to a new Safe.
+ */
+export async function transferUsdcFromSafe(destinationAddress, amountUsdc) {
+    const amountWei = ethers.utils.parseUnits(String(amountUsdc), 6);
+    const iface = new ethers.utils.Interface(ERC20_ABI);
+    const data = iface.encodeFunctionData('transfer', [destinationAddress, amountWei]);
+    await execSafeCall(USDC_ADDRESS, data, `transfer ${amountUsdc} USDC.e → ${destinationAddress.slice(0, 10)}...`);
 }
 
 /**
