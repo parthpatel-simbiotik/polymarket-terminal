@@ -67,6 +67,7 @@ async function transferFromEoa(amountUsdc, destinationSafe) {
 
     logger.info(`Transferring ${amountUsdc} USDC.e from EOA (${short(wallet.address)}) to Safe (${short(destinationSafe)})`);
     const tx = await usdc.transfer(destinationSafe, amountWei);
+    logger.info('Tx:', tx);
     await tx.wait();
     logger.success('Done. Tx:', tx.hash);
 }

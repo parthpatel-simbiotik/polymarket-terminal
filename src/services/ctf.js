@@ -12,6 +12,7 @@ import { ethers } from 'ethers';
 import config from '../config/index.js';
 import { getSigner, getPolygonProvider } from './client.js';
 import logger from '../utils/logger.js';
+import { recordEvent } from '../utils/mmSimSession.js';
 
 // ── Contract addresses (Polygon mainnet) ──────────────────────────────────────
 
@@ -422,6 +423,7 @@ export async function cleanupOpenPositions(clobClient) {
                 mergedCount++;
             } else {
                 logger.info(`MM[SIM]: would merge ${minShares.toFixed(3)} shares for ${conditionId.slice(0, 10)}...`);
+                recordEvent({ type: 'merge', amount: minShares, description: `cleanup merge ${conditionId.slice(0, 10)}...` });
             }
         } catch (err) {
             logger.error(`MM: failed to clean up ${conditionId.slice(0, 10)}... — ${parseOnchainError(err)}`);
@@ -509,6 +511,7 @@ export async function redeemMMPositions() {
 
             if (config.dryRun) {
                 logger.money(`MM[SIM] redeem: ${label} — ${totalShares.toFixed(3)} shares → ~$${expectedUsdc.toFixed(2)} USDC`);
+                recordEvent({ type: 'redeem', amount: expectedUsdc, description: `redeem ${label}`, market: label });
                 continue;
             }
 

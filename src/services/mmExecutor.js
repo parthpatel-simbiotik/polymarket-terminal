@@ -15,6 +15,7 @@ import config from '../config/index.js';
 import { getClient, getUsdcBalance, getPolygonProvider } from './client.js';
 import { splitPosition, mergePositions } from './ctf.js';
 import logger from '../utils/logger.js';
+import { recordEvent, recordOrder, recordPosition, getBalance } from '../utils/mmSimSession.js';
 
 // CTF contract for on-chain balance queries
 const CTF_ADDRESS = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';
@@ -161,6 +162,11 @@ async function monitorAndManage(pos) {
                 pos.yes.filled = true;
                 const pnl = (pos.yes.fillPrice - pos.yes.entryPrice) * pos.yes.shares;
                 logger.money(`MM${config.dryRun ? '[SIM]' : ''}: YES filled @ $${pos.yes.fillPrice.toFixed(3)} | P&L $${pnl.toFixed(2)}`);
+                if (config.dryRun) {
+                    const proceeds = pos.yes.fillPrice * pos.yes.shares;
+                    recordEvent({ type: 'fill_yes', amount: proceeds, pnl, market: label, side: 'YES', shares: pos.yes.shares, price: pos.yes.fillPrice });
+                    recordOrder({ market: label, side: 'YES', orderType: 'limit_sell', price: pos.yes.fillPrice, shares: pos.yes.shares, status: 'filled', pnl });
+                }
             }
         }
 
@@ -178,6 +184,11 @@ async function monitorAndManage(pos) {
                 pos.no.filled = true;
                 const pnl = (pos.no.fillPrice - pos.no.entryPrice) * pos.no.shares;
                 logger.money(`MM${config.dryRun ? '[SIM]' : ''}: NO  filled @ $${pos.no.fillPrice.toFixed(3)} | P&L $${pnl.toFixed(2)}`);
+                if (config.dryRun) {
+                    const proceeds = pos.no.fillPrice * pos.no.shares;
+                    recordEvent({ type: 'fill_no', amount: proceeds, pnl, market: label, side: 'NO', shares: pos.no.shares, price: pos.no.fillPrice });
+                    recordOrder({ market: label, side: 'NO', orderType: 'limit_sell', price: pos.no.fillPrice, shares: pos.no.shares, status: 'filled', pnl });
+                }
             }
         }
 
@@ -234,6 +245,9 @@ async function cutLoss(pos) {
         } else {
             const recovered = await mergePositions(conditionId, mergeAmt);
             logger.money(`MM: merge complete — recovered ~$${recovered.toFixed ? recovered.toFixed(2) : recovered} USDC (P&L ≈ $0)`);
+            if (config.dryRun) {
+                recordEvent({ type: 'merge', amount: recovered, description: `merge ${pos.question.substring(0, 40)}`, market: pos.question.substring(0, 40) });
+            }
         }
 
         // Mark both sides closed at entry price
@@ -270,6 +284,11 @@ async function cutLoss(pos) {
             // PnL uses actual sold amount (not original pos.shares)
             const pnl = (s.fillPrice - s.entryPrice) * sellShares;
             logger.warn(`MM: ${side.toUpperCase()} cut @ $${s.fillPrice.toFixed(3)} | sold ${sellShares.toFixed(3)} sh | P&L $${pnl.toFixed(2)}`);
+            if (config.dryRun) {
+                const proceeds = result.fillPrice * sellShares;
+                recordEvent({ type: 'cut_loss_sell', amount: proceeds, pnl, market: pos.question.substring(0, 40), side: side.toUpperCase(), shares: sellShares, price: result.fillPrice });
+                recordOrder({ market: pos.question.substring(0, 40), side: side.toUpperCase(), orderType: 'market_sell', price: result.fillPrice, shares: sellShares, status: 'filled', pnl });
+            }
         }
     }
 
@@ -352,6 +371,7 @@ async function attemptRecoveryBuy(pos) {
 
     if (config.dryRun) {
         logger.money(`MM recovery[SIM]: bought ${filledShares.toFixed(3)} ${candidate.side} @ $${entryPrice.toFixed(3)}`);
+        recordEvent({ type: 'recovery_buy', amount: -recoverySize, description: `recovery buy ${candidate.side}`, market: label, side: candidate.side, shares: filledShares, price: entryPrice });
     } else {
         try {
             const res = await client.createAndPostMarketOrder(
@@ -402,6 +422,9 @@ async function attemptRecoveryBuy(pos) {
     if (config.dryRun) {
         const simPnl = (currentPrice - entryPrice) * filledShares;
         logger.warn(`MM recovery[SIM]: 2nd CL @ $${currentPrice.toFixed(3)} | P&L $${simPnl.toFixed(2)}`);
+        const proceeds = currentPrice * filledShares;
+        recordEvent({ type: 'recovery_sell', amount: proceeds, pnl: simPnl, market: label, side: candidate.side, shares: filledShares, price: currentPrice });
+        recordOrder({ market: label, side: candidate.side, orderType: 'market_sell', price: currentPrice, shares: filledShares, status: 'filled', pnl: simPnl });
         return;
     }
 
@@ -445,7 +468,13 @@ export async function executeMMStrategy(market) {
 
     // ── Balance check ───────────────────────────────────────────
     const totalNeeded = config.mmTradeSize * 2; // $10 total → 10 YES + 10 NO
-    if (!config.dryRun) {
+    if (config.dryRun) {
+        const simBal = getBalance();
+        if (simBal < totalNeeded) {
+            logger.error(`MM${tag}: insufficient sim balance $${simBal.toFixed(2)} (need $${totalNeeded})`);
+            return;
+        }
+    } else {
         const balance = await getUsdcBalance();
         if (balance < totalNeeded) {
             logger.error(`MM${tag}: insufficient balance $${balance.toFixed(2)} (need $${totalNeeded})`);
@@ -467,6 +496,11 @@ export async function executeMMStrategy(market) {
 
     const entryPrice = 0.50;
     logger.info(`MM${tag}: split done — ${shares} YES + ${shares} NO @ $${entryPrice}`);
+
+    if (config.dryRun) {
+        recordEvent({ type: 'split', amount: -totalNeeded, description: `split ${label}`, market: label });
+        recordPosition({ market: label, conditionId, entryCost: totalNeeded, yesShares: shares, noShares: shares, status: 'open' });
+    }
 
     // ── Place limit sells ───────────────────────────────────────
     logger.info(`MM${tag}: ${sim}placing limit sells @ $${config.mmSellPrice}`);
@@ -512,5 +546,9 @@ export async function executeMMStrategy(market) {
     // ── Monitor (runs until done/cut/expired) ───────────────────
     await monitorAndManage(pos);
 
+    if (config.dryRun) {
+        const totalPnl = calcPnl(pos);
+        recordPosition({ market: label, conditionId, entryCost: totalNeeded, yesShares: pos.yes.shares, noShares: pos.no.shares, status: 'closed', exitReason: pos.status, pnl: totalPnl, endTime: pos.endTime });
+    }
     activePositions.delete(conditionId);
 }

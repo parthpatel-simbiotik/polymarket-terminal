@@ -43,6 +43,8 @@ const config = {
 
   // Dry run
   dryRun: process.env.DRY_RUN === 'true',
+  // Simulation starting balance (MM sim only; overridable via --balance in mm.js)
+  simBalance: parseFloat(process.env.SIM_BALANCE || '1000') || 1000,
 
   // Retry settings
   maxRetries: 5,

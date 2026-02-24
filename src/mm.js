@@ -4,6 +4,7 @@
  * Detects new Bitcoin 5-minute markets and executes the MM strategy.
  * Run with: npm run mm       (live)
  *           npm run mm-sim   (simulation / dry-run)
+ *           npm run mm-sim -- --balance 500   (sim with starting balance 500 USDC)
  */
 
 import { validateMMConfig } from './config/index.js';
@@ -15,6 +16,17 @@ import { startMMDetector, stopMMDetector } from './services/mmDetector.js';
 import { executeMMStrategy, getActiveMMPositions } from './services/mmExecutor.js';
 import { getUsdcBalance } from './services/client.js';
 import { cleanupOpenPositions, redeemMMPositions, MIN_SHARES_PER_SIDE } from './services/ctf.js';
+import { startSession, getSession, getBalance, endSession, writeSessionExcel } from './utils/mmSimSession.js';
+
+// ── Parse CLI: --balance / -b for simulation starting balance ─────────────────
+const argv = process.argv.slice(2);
+for (let i = 0; i < argv.length; i++) {
+    if ((argv[i] === '--balance' || argv[i] === '-b') && argv[i + 1]) {
+        const val = parseFloat(argv[i + 1]);
+        if (!Number.isNaN(val) && val >= 0) config.simBalance = val;
+        break;
+    }
+}
 
 // ── Validate config ────────────────────────────────────────────────────────────
 
@@ -38,6 +50,13 @@ registerKeyHandler('x', async () => {
     stopMMDetector();
     if (refreshTimer) clearInterval(refreshTimer);
     if (redeemTimer) clearInterval(redeemTimer);
+    if (config.dryRun) {
+        const data = endSession();
+        if (data) {
+            const path = writeSessionExcel(data);
+            logger.info(`MM: session saved to ${path}`);
+        }
+    }
     logger.info('MM: quitting in 2s...');
     await new Promise((r) => setTimeout(r, 2000));
 });
@@ -61,6 +80,12 @@ if (config.mmTradeSize < MIN_SHARES_PER_SIDE) {
     process.exit(1);
 }
 
+// ── Simulation session (dry-run only) ─────────────────────────────────────────
+if (config.dryRun) {
+    startSession(config.simBalance);
+    logger.info(`MM[SIM]: session started with balance $${config.simBalance.toFixed(2)}`);
+}
+
 // ── Cleanup leftover positions on startup ─────────────────────────────────────
 
 try {
@@ -79,7 +104,7 @@ async function buildStatusContent() {
     if (!config.dryRun) {
         try { balance = (await getUsdcBalance()).toFixed(2); } catch { /* ignore */ }
     } else {
-        balance = '{yellow-fg}SIM{/yellow-fg}';
+        balance = `${getBalance().toFixed(2)} {gray-fg}(sim){/gray-fg}`;
     }
     lines.push(`{bold}BALANCE{/bold}`);
     lines.push(`  USDC.e: {green-fg}$${balance}{/green-fg}`);
@@ -220,7 +245,18 @@ function shutdown() {
     logger.warn('MM: shutting down...');
     stopMMDetector();
     if (refreshTimer) clearInterval(refreshTimer);
-    if (redeemTimer)  clearInterval(redeemTimer);
+    if (redeemTimer) clearInterval(redeemTimer);
+    if (config.dryRun) {
+        const data = endSession();
+        if (data) {
+            try {
+                const path = writeSessionExcel(data);
+                logger.info(`MM: session saved to ${path}`);
+            } catch (e) {
+                logger.error(`MM: failed to write session Excel: ${e.message}`);
+            }
+        }
+    }
     process.exit(0);
 }
 
