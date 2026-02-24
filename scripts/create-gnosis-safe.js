@@ -19,6 +19,7 @@
  */
 
 import dotenv from 'dotenv';
+import logger from '../src/utils/logger.js';
 dotenv.config();
 import { createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -71,32 +72,27 @@ async function main() {
         RelayerTxType.SAFE,
     );
 
-    console.log('EOA (owner):', account.address);
-    console.log('Deploying Safe via Polymarket relayer (gasless)...');
-    console.log('');
+    logger.info('EOA (owner):', account.address);
+    logger.info('Deploying Safe via Polymarket relayer (gasless)...');
 
     const response = await client.deploy();
     const result = await response.wait();
 
     if (!result?.proxyAddress) {
-        console.error('Deploy failed or no proxy address in result:', result);
+        logger.error('Deploy failed or no proxy address in result:', result);
         process.exit(1);
     }
 
-    console.log('Safe deployed successfully.');
-    console.log('Safe (proxy) address:', result.proxyAddress);
+    logger.success('Safe deployed:', result.proxyAddress);
     if (result.transactionHash) {
-        console.log('Transaction:', result.transactionHash);
+        logger.info('Transaction:', result.transactionHash);
     }
     console.log('');
-    console.log('Next steps (see https://docs.polymarket.com/market-makers/getting-started):');
-    console.log('1. In .env set:  PROXY_WALLET_ADDRESS=' + result.proxyAddress);
-    console.log('2. Deposit USDC.e to the Safe:');
-    console.log('   - Bridge API: POST https://bridge.polymarket.com/deposit with address:', result.proxyAddress);
-    console.log('   - Or send USDC.e (Polygon) to the Safe address from an exchange or wallet.');
-    console.log('   - USDC.e: 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174');
-    console.log('3. Approve tokens (USDC.e → CTF, CTF → CTF Exchange / Neg Risk Exchange).');
-    console.log('4. Run the app; it will derive CLOB API credentials from your key.');
+    console.log('Next steps (see docs.polymarket.com/market-makers/getting-started):');
+    console.log('  1. .env  PROXY_WALLET_ADDRESS=' + result.proxyAddress);
+    console.log('  2. Deposit USDC.e to the Safe');
+    console.log('  3. Approve tokens (USDC.e \u2192 CTF, CTF \u2192 exchanges)');
+    console.log('  4. Run the app to derive CLOB API credentials');
     console.log('');
 }
 

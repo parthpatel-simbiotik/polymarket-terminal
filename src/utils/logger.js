@@ -32,24 +32,25 @@ function stringify(args) {
 
 function log(ansiColor, bColor, emoji, level, ...args) {
     const msg = stringify(args);
+    const tag = `${emoji} ${level.padEnd(7)}`;
     if (outputFn) {
         const [open, close] = bColor;
-        outputFn(`{gray-fg}[${ts()}]{/gray-fg} ${open}${emoji} ${level}${close} ${msg}`);
+        outputFn(`{gray-fg}[${ts()}]{/gray-fg} ${open}${tag}${close} ${msg}`);
     } else {
         process.stdout.write(
-            `${A.dim}[${ts()}]${A.reset} ${ansiColor}${emoji} ${level}${A.reset} ${msg}\n`,
+            `${A.dim}[${ts()}]${A.reset} ${ansiColor}${tag}${A.reset} ${msg}\n`,
         );
     }
 }
 
 const logger = {
-    info:    (...a) => log(A.blue,    B.blue,    'ℹ️ ', 'INFO',    ...a),
-    success: (...a) => log(A.green,   B.green,   '✅', 'SUCCESS', ...a),
-    warn:    (...a) => log(A.yellow,  B.yellow,  '⚠️ ', 'WARN',    ...a),
-    error:   (...a) => log(A.red,     B.red,     '❌', 'ERROR',   ...a),
-    trade:   (...a) => log(A.magenta, B.magenta, '📊', 'TRADE',   ...a),
-    watch:   (...a) => log(A.cyan,    B.cyan,    '👀', 'WATCH',   ...a),
-    money:   (...a) => log(A.green,   B.green,   '💰', 'MONEY',   ...a),
+    info:    (...a) => log(A.blue,    B.blue,    '\u2139\uFE0F', 'INFO',    ...a),
+    success: (...a) => log(A.green,   B.green,   '\u2705',       'SUCCESS', ...a),
+    warn:    (...a) => log(A.yellow,  B.yellow,  '\u26A0\uFE0F', 'WARN',    ...a),
+    error:   (...a) => log(A.red,     B.red,     '\u274C',       'ERROR',   ...a),
+    trade:   (...a) => log(A.magenta, B.magenta, '\uD83D\uDCCA', 'TRADE',   ...a),
+    watch:   (...a) => log(A.cyan,    B.cyan,    '\uD83D\uDC40', 'WATCH',   ...a),
+    money:   (...a) => log(A.green,   B.green,   '\uD83D\uDCB0', 'MONEY',   ...a),
 
     /** Call once after initDashboard() to redirect all logs to the TUI */
     setOutput(fn) {

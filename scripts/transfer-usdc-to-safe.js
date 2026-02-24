@@ -29,8 +29,11 @@
 
 import dotenv from 'dotenv';
 import { ethers } from 'ethers';
+import logger from '../src/utils/logger.js';
 
 dotenv.config();
+
+const short = (addr) => `${addr.slice(0, 10)}\u2026${addr.slice(-4)}`;
 
 const USDC_E = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 const ERC20_ABI = [
@@ -62,10 +65,10 @@ async function transferFromEoa(amountUsdc, destinationSafe) {
         process.exit(1);
     }
 
-    console.log(`Transferring ${amountUsdc} USDC.e from EOA (${wallet.address}) to Safe (${destinationSafe})...`);
+    logger.info(`Transferring ${amountUsdc} USDC.e from EOA (${short(wallet.address)}) to Safe (${short(destinationSafe)})`);
     const tx = await usdc.transfer(destinationSafe, amountWei);
     await tx.wait();
-    console.log('Done. Tx:', tx.hash);
+    logger.success('Done. Tx:', tx.hash);
 }
 
 async function transferFromSafe(amountUsdc, destinationSafe) {
@@ -84,9 +87,9 @@ async function transferFromSafe(amountUsdc, destinationSafe) {
     const { transferUsdcFromSafe } = await import('../src/services/ctf.js');
 
     await initClient();
-    console.log(`Transferring ${amountUsdc} USDC.e from Safe (${sourceSafe}) to Safe (${destinationSafe})...`);
+    logger.info(`Transferring ${amountUsdc} USDC.e from Safe (${short(sourceSafe)}) to Safe (${short(destinationSafe)})`);
     await transferUsdcFromSafe(destinationSafe, amountUsdc);
-    console.log('Done.');
+    logger.success('Transfer complete');
 }
 
 async function main() {
@@ -113,10 +116,7 @@ async function main() {
         await transferFromEoa(amountUsdc, destination);
     }
 
-    console.log('');
-    console.log('Balance note: The amount now sits in the destination Safe. On Polymarket.com,');
-    console.log('the balance shown is for the wallet you are connected with — so the source');
-    console.log('wallet balance decreased and the destination Safe balance increased.');
+    logger.info('Balance now sits in the destination Safe (source decreased, destination increased)');
 }
 
 main().catch((err) => {

@@ -23,8 +23,11 @@
 
 import dotenv from 'dotenv';
 import { ethers } from 'ethers';
+import logger from '../src/utils/logger.js';
 
 dotenv.config();
+
+const short = (addr) => `${addr.slice(0, 10)}\u2026${addr.slice(-4)}`;
 
 async function main() {
     const args = process.argv.slice(2);
@@ -75,14 +78,14 @@ async function main() {
         process.exit(1);
     }
 
-    console.log(`Sending ${amountArg} MATIC from ${sender.address} to ${recipient}...`);
+    logger.info(`Sending ${amountArg} MATIC from ${short(sender.address)} to ${short(recipient)}`);
     const tx = await sender.sendTransaction({
         to: recipient,
         value: amountWei,
         gasLimit: 21000,
     });
     await tx.wait();
-    console.log('Done. Tx:', tx.hash);
+    logger.success('Done. Tx:', tx.hash);
 }
 
 main().catch((err) => {
