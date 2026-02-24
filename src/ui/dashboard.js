@@ -5,6 +5,12 @@
  */
 
 import readline from 'node:readline';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const LOG_DIR = join(__dirname, '../../data/logs');
 
 // ── ANSI codes ─────────────────────────────────────────────────────────────
 const ANSI = {
@@ -30,6 +36,27 @@ let statusContent = '\n {gray}Initializing...{/gray}';
 const keyHandlers = new Map();
 let lastStatusPrintMs = -60_000;
 const STATUS_PRINT_INTERVAL_MS = 30_000;
+let logFilePath = null;
+
+function getLogFilePath() {
+    if (logFilePath) return logFilePath;
+    const mode = process.env.DRY_RUN === 'true' ? 'sim' : 'live';
+    const duration = process.env.MM_DURATION?.toLowerCase();
+    const date = new Date().toISOString().slice(0, 10);
+    const durationPart = duration && ['5m', '15m'].includes(duration) ? `-${duration}` : '';
+    logFilePath = join(LOG_DIR, `events-${mode}${durationPart}-${date}.log`);
+    return logFilePath;
+}
+
+function appendToLogFile(text) {
+    try {
+        mkdirSync(LOG_DIR, { recursive: true });
+        const plain = stripAnsi(blessedToAnsi(String(text)));
+        appendFileSync(getLogFilePath(), plain + '\n', 'utf8');
+    } catch {
+        // ignore write errors
+    }
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -158,8 +185,9 @@ export function initDashboard() {
     return null;
 }
 
-/** Append a line to the live event log */
+/** Append a line to the live event log (and to log file) */
 export function appendLog(text) {
+    appendToLogFile(text);
     if (!active) {
         process.stdout.write(blessedToAnsi(String(text)) + '\n');
         return;
