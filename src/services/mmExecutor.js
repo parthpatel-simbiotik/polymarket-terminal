@@ -81,14 +81,7 @@ async function cancelOrder(orderId) {
 
 async function marketSell(tokenId, shares, tickSize, negRisk) {
     if (config.dryRun) {
-        try {
-            const client = getClient();
-            const mp = await client.getMidpoint(tokenId);
-            const price = parseFloat(mp?.mid ?? mp ?? '0') || 0;
-            return { success: true, fillPrice: price };
-        } catch {
-            return { success: true, fillPrice: 0 };
-        }
+        return { success: true, fillPrice: config.mmSellPrice };
     }
 
     const client = getClient();
@@ -153,7 +146,7 @@ async function monitorAndManage(pos) {
             let filled = false;
             if (config.dryRun) {
                 const hitPrice = await simPriceHitTarget(pos.yes.tokenId);
-                if (hitPrice) { filled = true; pos.yes.fillPrice = hitPrice; }
+                if (hitPrice) { filled = true; pos.yes.fillPrice = config.mmSellPrice; }
             } else {
                 filled = await isOrderFilled(pos.yes.orderId, pos.yes.shares);
                 if (filled) pos.yes.fillPrice = config.mmSellPrice;
@@ -175,7 +168,7 @@ async function monitorAndManage(pos) {
             let filled = false;
             if (config.dryRun) {
                 const hitPrice = await simPriceHitTarget(pos.no.tokenId);
-                if (hitPrice) { filled = true; pos.no.fillPrice = hitPrice; }
+                if (hitPrice) { filled = true; pos.no.fillPrice = config.mmSellPrice; }
             } else {
                 filled = await isOrderFilled(pos.no.orderId, pos.no.shares);
                 if (filled) pos.no.fillPrice = config.mmSellPrice;

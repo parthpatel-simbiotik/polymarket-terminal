@@ -241,7 +241,7 @@ async function handleNewMarket(market) {
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 
-function shutdown() {
+async function shutdown() {
     logger.warn('MM: shutting down...');
     stopMMDetector();
     if (refreshTimer) clearInterval(refreshTimer);
@@ -257,11 +257,10 @@ function shutdown() {
             }
         }
     }
-    process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => shutdown().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); }));
+process.on('SIGTERM', () => shutdown().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); }));
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
