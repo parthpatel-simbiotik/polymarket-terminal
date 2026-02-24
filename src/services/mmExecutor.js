@@ -45,6 +45,14 @@ export function getActiveMMPositions() {
     return Array.from(activePositions.values());
 }
 
+/** Wait for monitorAndManage to return and positions to be removed (for sim exit). */
+export async function waitForActivePositionsToClose(maxMs = 20_000) {
+    const deadline = Date.now() + maxMs;
+    while (activePositions.size > 0 && Date.now() < deadline) {
+        await sleep(500);
+    }
+}
+
 // ── Order helpers ─────────────────────────────────────────────────────────────
 
 async function placeLimitSell(tokenId, shares, price, tickSize, negRisk) {

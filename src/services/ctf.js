@@ -12,7 +12,7 @@ import { ethers } from 'ethers';
 import config from '../config/index.js';
 import { getSigner, getPolygonProvider } from './client.js';
 import logger from '../utils/logger.js';
-import { recordEvent } from '../utils/mmSimSession.js';
+import { recordEvent, recordOrder } from '../utils/mmSimSession.js';
 
 // ── Contract addresses (Polygon mainnet) ──────────────────────────────────────
 
@@ -326,15 +326,50 @@ export async function mergePositions(conditionId, sharesPerSide) {
  * and merge them back to USDC so we start with a clean slate.
  *
  * Strategy:
- *  1. Query Data API for the proxy wallet's open positions
- *  2. For each conditionId found, check on-chain ERC1155 balances for YES and NO tokens
- *  3. If the market is NOT yet resolved (payoutDenominator == 0), merge equal YES+NO back to USDC
- *  4. Cancel any open CLOB orders via the CLOB client
+ *  1. (Sim only) If simPositions provided, process in-memory positions first — merge or cut-loss, credit balance
+ *  2. Cancel all open CLOB orders
+ *  3. Query Data API for the proxy wallet's open positions
+ *  4. For each conditionId found, merge equal YES+NO back to USDC (or simulate in dryRun)
  *
  * @param {import('@polymarket/clob-client').ClobClient} clobClient
+ * @param {{ simPositions?: Array }} [opts] - When dryRun, pass sim positions from getActiveMMPositions()
  */
-export async function cleanupOpenPositions(clobClient) {
+export async function cleanupOpenPositions(clobClient, opts = {}) {
+    const { simPositions = [] } = opts;
     logger.info('MM: scanning for leftover positions to clean up...');
+
+    // ── 0. (Sim only) Process in-memory positions first ─────────────────────────
+    if (config.dryRun && simPositions.length > 0) {
+        logger.warn(`MM[SIM]: closing ${simPositions.length} open position(s) before exit...`);
+        for (const pos of simPositions) {
+            if (pos.status === 'done') continue;
+            const label = pos.question?.substring(0, 40) || '';
+            const neitherFilled = !pos.yes.filled && !pos.no.filled;
+
+            if (neitherFilled) {
+                const mergeAmt = Math.min(pos.yes.shares, pos.no.shares);
+                recordEvent({ type: 'merge', amount: mergeAmt, description: `exit merge ${label}`, market: label });
+                pos.yes.fillPrice = pos.yes.entryPrice;
+                pos.yes.filled = true;
+                pos.no.fillPrice = pos.no.entryPrice;
+                pos.no.filled = true;
+            } else {
+                for (const side of ['yes', 'no']) {
+                    const s = pos[side];
+                    if (s.filled) continue;
+                    const sellShares = s.shares;
+                    const fillPrice = config.mmSellPrice;
+                    const proceeds = fillPrice * sellShares;
+                    const pnl = (fillPrice - s.entryPrice) * sellShares;
+                    recordEvent({ type: 'cut_loss_sell', amount: proceeds, pnl, market: label, side: side.toUpperCase(), shares: sellShares, price: fillPrice });
+                    recordOrder({ market: label, side: side.toUpperCase(), orderType: 'market_sell', price: fillPrice, shares: sellShares, status: 'filled', pnl });
+                    s.fillPrice = fillPrice;
+                    s.filled = true;
+                }
+            }
+            pos.status = 'done';
+        }
+    }
 
     // ── 1. Cancel all open CLOB orders ──────────────────────────────────────────
     try {

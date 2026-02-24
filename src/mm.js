@@ -13,7 +13,7 @@ import logger from './utils/logger.js';
 import { initClient, getClient } from './services/client.js';
 import { initDashboard, appendLog, updateStatus, isDashboardActive, registerKeyHandler } from './ui/dashboard.js';
 import { startMMDetector, stopMMDetector } from './services/mmDetector.js';
-import { executeMMStrategy, getActiveMMPositions } from './services/mmExecutor.js';
+import { executeMMStrategy, getActiveMMPositions, waitForActivePositionsToClose } from './services/mmExecutor.js';
 import { getUsdcBalance } from './services/client.js';
 import { cleanupOpenPositions, redeemMMPositions, MIN_SHARES_PER_SIDE } from './services/ctf.js';
 import { startSession, getSession, getBalance, endSession, writeSessionExcel } from './utils/mmSimSession.js';
@@ -42,14 +42,17 @@ try {
 initDashboard();
 logger.setOutput(appendLog);
 
-// Press X: merge positions, redeem resolved, then quit
+// Press X: close positions, merge, redeem, then quit
 registerKeyHandler('x', async () => {
     logger.warn('MM: exit positions (merge + redeem) and quit...');
-    await cleanupOpenPositions(getClient());
-    await redeemMMPositions();
     stopMMDetector();
     if (refreshTimer) clearInterval(refreshTimer);
     if (redeemTimer) clearInterval(redeemTimer);
+    await cleanupOpenPositions(getClient(), {
+        simPositions: config.dryRun ? getActiveMMPositions() : undefined,
+    });
+    if (config.dryRun) await waitForActivePositionsToClose();
+    await redeemMMPositions();
     if (config.dryRun) {
         const data = endSession();
         if (data) {
@@ -246,6 +249,11 @@ async function shutdown() {
     stopMMDetector();
     if (refreshTimer) clearInterval(refreshTimer);
     if (redeemTimer) clearInterval(redeemTimer);
+    await cleanupOpenPositions(getClient(), {
+        simPositions: config.dryRun ? getActiveMMPositions() : undefined,
+    });
+    if (config.dryRun) await waitForActivePositionsToClose();
+    await redeemMMPositions();
     if (config.dryRun) {
         const data = endSession();
         if (data) {
