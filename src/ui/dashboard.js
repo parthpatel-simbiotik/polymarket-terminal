@@ -2,11 +2,22 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const blessed = require('blessed');
 
-let screen    = null;
-let logBox    = null;
-let statusBox = null;
-let active    = false;
+let screen     = null;
+let logBox     = null;
+let statusBox  = null;
+let statusBar  = null;
+let active     = false;
+const keyHandlers = new Map();
 
+function getStatusBarContent() {
+    const base =
+        ' {gray-fg}powered by{/gray-fg} {cyan-fg}@direkturcrypto | @parthpatel5{/cyan-fg} {gray-fg}terminal{/gray-fg}' +
+        '  {gray-fg}Ctrl+C / q = exit{/gray-fg}';
+    if (keyHandlers.has('x')) {
+        return base + '  {gray-fg}|  X = exit, redeem and quit{/gray-fg}';
+    }
+    return base;
+}
 
 export function initDashboard() {
     screen = blessed.screen({
@@ -61,16 +72,14 @@ export function initDashboard() {
     });
 
     // ── Bottom status bar ──────────────────────────────────────
-    blessed.box({
+    statusBar = blessed.box({
         parent: screen,
         bottom: 0,
         left: 0,
         width: '100%',
         height: 1,
         tags: true,
-        content:
-            ' {gray-fg}powered by{/gray-fg} {cyan-fg}@direkturcrypto{/cyan-fg} {gray-fg}terminal{/gray-fg}' +
-            '  {gray-fg}Ctrl+C / q = exit{/gray-fg}',
+        content: getStatusBarContent(),
         style: { bg: 'black', fg: 'white' },
     });
 
@@ -78,9 +87,24 @@ export function initDashboard() {
     // This prevents any raw escape sequence from leaking into panels
     screen.on('keypress', (_ch, key) => {
         if (!key) return;
-        if (key.full === 'C-c' || key.sequence === '\x03' || key.name === 'q') {
+        const k = (key.name || '').toLowerCase();
+        if (key.full === 'C-c' || key.sequence === '\x03' || k === 'q') {
             screen.destroy();
             process.exit(0);
+        }
+        if (keyHandlers.has(k)) {
+            const fn = keyHandlers.get(k);
+            Promise.resolve(fn())
+                .then(() => {
+                    screen.destroy();
+                    process.exit(0);
+                })
+                .catch((err) => {
+                    console.error(err);
+                    screen.destroy();
+                    process.exit(1);
+                });
+            return;
         }
         // every other key: swallowed here, never reaches any widget
     });
@@ -123,4 +147,19 @@ export function updateStatus(content) {
 
 export function isDashboardActive() {
     return active;
+}
+
+/**
+ * Register a key handler. When the key is pressed, the async callback runs;
+ * when it resolves, the app exits. Used by MM for "X = exit positions (merge) and quit".
+ * @param {string} keyName - e.g. 'x'
+ * @param {() => Promise<void>} asyncCallback
+ */
+export function registerKeyHandler(keyName, asyncCallback) {
+    const k = String(keyName).toLowerCase();
+    keyHandlers.set(k, asyncCallback);
+    if (statusBar) {
+        statusBar.setContent(getStatusBarContent());
+        if (screen) screen.render();
+    }
 }

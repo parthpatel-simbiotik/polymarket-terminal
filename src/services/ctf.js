@@ -406,7 +406,10 @@ export async function cleanupOpenPositions(clobClient) {
 
             const nonZero = balances.filter((b) => b.shares >= MIN_SHARES_PER_SIDE);
             if (nonZero.length < 2) {
-                logger.info(`MM: conditionId ${conditionId.slice(0, 10)}... balance too low to merge — skipping`);
+                logger.info(
+                    `MM: conditionId ${conditionId.slice(0, 10)}... only one side has balance (or too low) — ` +
+                    'cannot merge (need equal YES+NO); skipping. Sell on book or wait for resolution.'
+                );
                 continue;
             }
 

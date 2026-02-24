@@ -10,7 +10,7 @@ import { validateMMConfig } from './config/index.js';
 import config from './config/index.js';
 import logger from './utils/logger.js';
 import { initClient, getClient } from './services/client.js';
-import { initDashboard, appendLog, updateStatus, isDashboardActive } from './ui/dashboard.js';
+import { initDashboard, appendLog, updateStatus, isDashboardActive, registerKeyHandler } from './ui/dashboard.js';
 import { startMMDetector, stopMMDetector } from './services/mmDetector.js';
 import { executeMMStrategy, getActiveMMPositions } from './services/mmExecutor.js';
 import { getUsdcBalance } from './services/client.js';
@@ -29,6 +29,18 @@ try {
 
 initDashboard();
 logger.setOutput(appendLog);
+
+// Press X: merge positions, redeem resolved, then quit
+registerKeyHandler('x', async () => {
+    logger.warn('MM: exit positions (merge + redeem) and quit...');
+    await cleanupOpenPositions(getClient());
+    await redeemMMPositions();
+    stopMMDetector();
+    if (refreshTimer) clearInterval(refreshTimer);
+    if (redeemTimer) clearInterval(redeemTimer);
+    logger.info('MM: quitting in 2s...');
+    await new Promise((r) => setTimeout(r, 2000));
+});
 
 // ── Init CLOB client ──────────────────────────────────────────────────────────
 
