@@ -140,6 +140,7 @@ async function buildStatusContent() {
     leftLines.push(`  Trade sz : $${config.mmTradeSize} per side`);
     leftLines.push(`  Sell @   : $${config.mmSellPrice}`);
     leftLines.push(`  Cut loss : ${config.mmCutLossTime}s before close`);
+    leftLines.push(`  Liq chk  : ${config.mmLiquidityCheck ? '{green-fg}ON{/green-fg}' : '{red-fg}OFF{/red-fg}'} (max imbal: ${config.mmMinLiquiditySpread})`);
 
     // Right: Active positions
     const positions = getActiveMMPositions();
@@ -158,7 +159,18 @@ async function buildStatusContent() {
                 : `{red-fg}${secsLeft}s{/red-fg}`;
 
             rightLines.push(`  {cyan-fg}${assetTag}${label}{/cyan-fg}`);
-            rightLines.push(`  ${pos.status} | ${timeStr}`);
+
+            // Liquidity indicator from entry midpoints
+            const yMid = pos.entryYesMid;
+            const nMid = pos.entryNoMid;
+            let liqTag = '';
+            if (yMid && nMid) {
+                const imbal = Math.abs(yMid - nMid);
+                const liqColor = imbal <= 0.10 ? 'green' : imbal <= 0.20 ? 'yellow' : 'red';
+                const liqLabel = imbal <= 0.10 ? 'HIGH' : imbal <= 0.20 ? 'MED' : 'LOW';
+                liqTag = ` {${liqColor}-fg}LIQ:${liqLabel}{/${liqColor}-fg}`;
+            }
+            rightLines.push(`  ${pos.status} | ${timeStr}${liqTag}`);
 
             // YES side
             const yFill = pos.yes.filled

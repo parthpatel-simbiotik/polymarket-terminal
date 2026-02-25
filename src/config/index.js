@@ -63,7 +63,7 @@ const config = {
 
   // ── Liquidity Check (pre-entry filter) ───────────────────────
   mmLiquidityCheck:      process.env.MM_LIQUIDITY_CHECK !== 'false', // enabled by default
-  mmMinLiquiditySpread:  parseFloat(process.env.MM_MIN_LIQUIDITY_SPREAD || '0.20'), // max spread to allow entry
+  mmMinLiquiditySpread:  parseFloat(process.env.MM_MAX_IMBALANCE || '0.20'), // max YES-NO midpoint gap to allow entry
 
   // ── Recovery Buy (after cut-loss) ─────────────────────────────
   // When enabled: after cutting loss, monitor prices for 10s and

@@ -198,7 +198,7 @@ export function writeSessionExcel(data, outputDir = DATA_DIR) {
     // Orders (with new spread/midpoint columns)
     if (data.orders.length > 0) {
         const orderKeys = ['time', 'market', 'side', 'orderType', 'price', 'shares', 'status', 'pnl',
-            'midpointAtOrder', 'spreadAtOrder', 'bestBid', 'bestAsk'];
+            'midpointAtFill', 'spreadAtFill', 'otherSideMidAtFill'];
         const orderRows = [
             orderKeys,
             ...data.orders.map((o) => orderKeys.map((k) => (o[k] != null ? o[k] : ''))),

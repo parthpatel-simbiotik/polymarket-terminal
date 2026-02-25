@@ -173,21 +173,23 @@ async function monitorAndManage(pos) {
                 const pnl = (pos.yes.fillPrice - pos.yes.entryPrice) * pos.yes.shares;
                 logger.money(`MM${config.dryRun ? '[SIM]' : ''}: YES filled @ $${pos.yes.fillPrice.toFixed(3)} | P&L $${pnl.toFixed(2)}`);
                 if (config.dryRun) {
-                    // Capture midpoint/spread at fill time
-                    let midAtFill = null, spreadAtFill = null, bestBidAtFill = null, bestAskAtFill = null;
+                    // Capture real midpoint/spread at fill time (getMidpoint returns actual trading mid, not orderbook mid)
+                    let midAtFill = null, spreadAtFill = null, otherMidAtFill = null;
                     try {
                         const client = getClient();
-                        const ob = await client.getOrderBook(pos.yes.tokenId);
-                        const bids = ob?.bids || []; const asks = ob?.asks || [];
-                        bestBidAtFill = bids.length > 0 ? parseFloat(bids[0].price) : null;
-                        bestAskAtFill = asks.length > 0 ? parseFloat(asks[0].price) : null;
-                        midAtFill = bestBidAtFill != null && bestAskAtFill != null ? (bestBidAtFill + bestAskAtFill) / 2 : null;
-                        spreadAtFill = bestBidAtFill != null && bestAskAtFill != null ? bestAskAtFill - bestBidAtFill : null;
+                        const [mp, sp, otherMp] = await Promise.all([
+                            client.getMidpoint(pos.yes.tokenId),
+                            client.getSpread(pos.yes.tokenId),
+                            client.getMidpoint(pos.no.tokenId),
+                        ]);
+                        midAtFill = parseFloat(mp?.mid ?? mp ?? '0') || null;
+                        spreadAtFill = parseFloat(sp?.spread ?? sp ?? '0') || null;
+                        otherMidAtFill = parseFloat(otherMp?.mid ?? otherMp ?? '0') || null;
                     } catch { /* ignore */ }
                     const proceeds = pos.yes.fillPrice * pos.yes.shares;
                     recordEvent({ type: 'fill_yes', amount: proceeds, pnl, market: label, side: 'YES', shares: pos.yes.shares, price: pos.yes.fillPrice });
                     recordOrder({ market: label, side: 'YES', orderType: 'limit_sell', price: pos.yes.fillPrice, shares: pos.yes.shares, status: 'filled', pnl,
-                        midpointAtOrder: midAtFill, spreadAtOrder: spreadAtFill, bestBid: bestBidAtFill, bestAsk: bestAskAtFill });
+                        midpointAtFill: midAtFill, spreadAtFill, otherSideMidAtFill: otherMidAtFill });
                 }
             }
         }
@@ -208,20 +210,22 @@ async function monitorAndManage(pos) {
                 const pnl = (pos.no.fillPrice - pos.no.entryPrice) * pos.no.shares;
                 logger.money(`MM${config.dryRun ? '[SIM]' : ''}: NO  filled @ $${pos.no.fillPrice.toFixed(3)} | P&L $${pnl.toFixed(2)}`);
                 if (config.dryRun) {
-                    let midAtFill = null, spreadAtFill = null, bestBidAtFill = null, bestAskAtFill = null;
+                    let midAtFill = null, spreadAtFill = null, otherMidAtFill = null;
                     try {
                         const client = getClient();
-                        const ob = await client.getOrderBook(pos.no.tokenId);
-                        const bids = ob?.bids || []; const asks = ob?.asks || [];
-                        bestBidAtFill = bids.length > 0 ? parseFloat(bids[0].price) : null;
-                        bestAskAtFill = asks.length > 0 ? parseFloat(asks[0].price) : null;
-                        midAtFill = bestBidAtFill != null && bestAskAtFill != null ? (bestBidAtFill + bestAskAtFill) / 2 : null;
-                        spreadAtFill = bestBidAtFill != null && bestAskAtFill != null ? bestAskAtFill - bestBidAtFill : null;
+                        const [mp, sp, otherMp] = await Promise.all([
+                            client.getMidpoint(pos.no.tokenId),
+                            client.getSpread(pos.no.tokenId),
+                            client.getMidpoint(pos.yes.tokenId),
+                        ]);
+                        midAtFill = parseFloat(mp?.mid ?? mp ?? '0') || null;
+                        spreadAtFill = parseFloat(sp?.spread ?? sp ?? '0') || null;
+                        otherMidAtFill = parseFloat(otherMp?.mid ?? otherMp ?? '0') || null;
                     } catch { /* ignore */ }
                     const proceeds = pos.no.fillPrice * pos.no.shares;
                     recordEvent({ type: 'fill_no', amount: proceeds, pnl, market: label, side: 'NO', shares: pos.no.shares, price: pos.no.fillPrice });
                     recordOrder({ market: label, side: 'NO', orderType: 'limit_sell', price: pos.no.fillPrice, shares: pos.no.shares, status: 'filled', pnl,
-                        midpointAtOrder: midAtFill, spreadAtOrder: spreadAtFill, bestBid: bestBidAtFill, bestAsk: bestAskAtFill });
+                        midpointAtFill: midAtFill, spreadAtFill, otherSideMidAtFill: otherMidAtFill });
                 }
             }
         }
@@ -323,9 +327,24 @@ async function cutLoss(pos) {
             const pnl = (s.fillPrice - s.entryPrice) * sellShares;
             logger.warn(`MM: ${side.toUpperCase()} cut @ $${s.fillPrice.toFixed(3)} | sold ${sellShares.toFixed(3)} sh | P&L $${pnl.toFixed(2)}`);
             if (config.dryRun) {
+                // Capture midpoints at cut-loss sell time
+                let midAtCut = null, spreadAtCut = null, otherMidAtCut = null;
+                try {
+                    const client = getClient();
+                    const otherSide = side === 'yes' ? 'no' : 'yes';
+                    const [mp, sp, otherMp] = await Promise.all([
+                        client.getMidpoint(s.tokenId),
+                        client.getSpread(s.tokenId),
+                        client.getMidpoint(pos[otherSide].tokenId),
+                    ]);
+                    midAtCut = parseFloat(mp?.mid ?? mp ?? '0') || null;
+                    spreadAtCut = parseFloat(sp?.spread ?? sp ?? '0') || null;
+                    otherMidAtCut = parseFloat(otherMp?.mid ?? otherMp ?? '0') || null;
+                } catch { /* ignore */ }
                 const proceeds = result.fillPrice * sellShares;
                 recordEvent({ type: 'cut_loss_sell', amount: proceeds, pnl, market: pos.question.substring(0, 40), side: side.toUpperCase(), shares: sellShares, price: result.fillPrice });
-                recordOrder({ market: pos.question.substring(0, 40), side: side.toUpperCase(), orderType: 'market_sell', price: result.fillPrice, shares: sellShares, status: 'filled', pnl });
+                recordOrder({ market: pos.question.substring(0, 40), side: side.toUpperCase(), orderType: 'market_sell', price: result.fillPrice, shares: sellShares, status: 'filled', pnl,
+                    midpointAtFill: midAtCut, spreadAtFill: spreadAtCut, otherSideMidAtFill: otherMidAtCut });
             }
         }
     }
@@ -520,24 +539,32 @@ export async function executeMMStrategy(market) {
         }
     }
 
-    // ── Pre-entry liquidity check ────────────────────────────────
+    // ── Pre-entry liquidity check (midpoint-based) ─────────────
+    // For binary markets, raw spread is always 0.01-0.99 (useless).
+    // Instead check if midpoints are balanced (~0.50). A one-sided market
+    // (YES at 0.70 / NO at 0.30) is unlikely to fill both sides.
+    let entryYesMid = null, entryNoMid = null;
     if (config.mmLiquidityCheck) {
         try {
             const client = getClient();
-            const [yesSpread, noSpread] = await Promise.all([
-                client.getSpread(yesTokenId),
-                client.getSpread(noTokenId),
+            const [yesMp, noMp] = await Promise.all([
+                client.getMidpoint(yesTokenId),
+                client.getMidpoint(noTokenId),
             ]);
-            const yesSpreadVal = parseFloat(yesSpread?.spread ?? yesSpread ?? '1');
-            const noSpreadVal = parseFloat(noSpread?.spread ?? noSpread ?? '1');
+            entryYesMid = parseFloat(yesMp?.mid ?? yesMp ?? '0') || null;
+            entryNoMid = parseFloat(noMp?.mid ?? noMp ?? '0') || null;
 
-            if (yesSpreadVal > config.mmMinLiquiditySpread || noSpreadVal > config.mmMinLiquiditySpread) {
-                logger.warn(`MM${tag}: skipping ${label} — spread too wide (YES: ${yesSpreadVal.toFixed(3)}, NO: ${noSpreadVal.toFixed(3)})`);
-                if (config.dryRun) {
-                    recordEvent({ type: 'skip_low_liquidity', amount: 0, market: label,
-                        description: `YES spread=${yesSpreadVal.toFixed(3)}, NO spread=${noSpreadVal.toFixed(3)}` });
+            if (entryYesMid && entryNoMid) {
+                const imbalance = Math.abs(entryYesMid - entryNoMid);
+                if (imbalance > config.mmMinLiquiditySpread) {
+                    logger.warn(`MM${tag}: skipping ${label} — market imbalanced (YES: ${entryYesMid.toFixed(3)}, NO: ${entryNoMid.toFixed(3)}, imbalance: ${imbalance.toFixed(3)})`);
+                    if (config.dryRun) {
+                        recordEvent({ type: 'skip_low_liquidity', amount: 0, market: label,
+                            description: `YES mid=${entryYesMid.toFixed(3)}, NO mid=${entryNoMid.toFixed(3)}, imbalance=${imbalance.toFixed(3)}` });
+                    }
+                    return;
                 }
-                return;
+                logger.info(`MM${tag}: liquidity OK — YES: ${entryYesMid.toFixed(3)}, NO: ${entryNoMid.toFixed(3)}, imbalance: ${imbalance.toFixed(3)}`);
             }
         } catch (err) {
             logger.warn(`MM${tag}: liquidity check failed (${err.message}) — proceeding anyway`);
@@ -614,6 +641,8 @@ export async function executeMMStrategy(market) {
         negRisk,
         status: 'monitoring',
         enteredAt: new Date().toISOString(),
+        entryYesMid: entryYesMid || yesMidAtEntry,
+        entryNoMid: entryNoMid || noMidAtEntry,
         yes: {
             tokenId: yesTokenId,
             shares,
