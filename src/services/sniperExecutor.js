@@ -18,6 +18,7 @@ import { Side, OrderType } from '@polymarket/clob-client';
 import config from '../config/index.js';
 import { getClient } from './client.js';
 import logger from '../utils/logger.js';
+import { recordEvent, recordSnipe, getBalance } from '../utils/sniperSimSession.js';
 
 // In-memory tracking of placed snipe orders (for TUI status panel)
 const activeSnipes = []; // { asset, side, question, orderId, price, shares, cost, potentialPayout }
@@ -41,6 +42,22 @@ export async function executeSnipe(market) {
     for (const { name, tokenId } of sides) {
         if (config.dryRun) {
             const cost = config.sniperPrice * config.sniperShares;
+            const simBal = getBalance();
+            if (simBal < cost) {
+                logger.error(`SNIPER[SIM]: insufficient sim balance $${simBal.toFixed(2)} (need $${cost.toFixed(3)} for ${asset.toUpperCase()} ${name})`);
+                continue;
+            }
+            recordEvent({ type: 'place_snipe', amount: -cost, market: label, side: name, shares: config.sniperShares, price: config.sniperPrice });
+            recordSnipe({
+                asset: asset.toUpperCase(),
+                side: name,
+                question: label,
+                orderId: `sim-${Date.now()}-${tokenId.slice(-6)}`,
+                price: config.sniperPrice,
+                shares: config.sniperShares,
+                cost,
+                potentialPayout: config.sniperShares,
+            });
             logger.trade(`SNIPER[SIM]: ${asset.toUpperCase()} ${name} @ $${config.sniperPrice} × ${config.sniperShares}sh | cost $${cost.toFixed(3)} | payout $${config.sniperShares} if wins`);
             activeSnipes.push({
                 asset: asset.toUpperCase(),

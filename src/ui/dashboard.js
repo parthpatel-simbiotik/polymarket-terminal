@@ -38,15 +38,21 @@ const keyHandlers = new Map();
 let lastStatusPrintMs = -60_000;
 const STATUS_PRINT_INTERVAL_MS = 30_000;
 let logFilePath = null;
+let botType = 'mm';
 
 function getLogFilePath() {
     if (logFilePath) return logFilePath;
     const mode = process.env.DRY_RUN === 'true' ? 'sim' : 'live';
-    const duration = process.env.MM_DURATION?.toLowerCase();
-    const assets = (process.env.MM_ASSETS || 'btc').replace(/,/g, '_').toLowerCase();
     const date = new Date().toISOString().slice(0, 10);
-    const durationPart = duration && ['5m', '15m'].includes(duration) ? `-${duration}` : '';
-    logFilePath = join(LOG_DIR, `events-${mode}${durationPart}-${assets}-${date}.log`);
+    if (botType === 'sniper') {
+        const assets = (process.env.SNIPER_ASSETS || 'eth_sol_xrp').replace(/,/g, '_').toLowerCase();
+        logFilePath = join(LOG_DIR, `events-${mode}-sniper-${assets}-${date}.log`);
+    } else {
+        const duration = process.env.MM_DURATION?.toLowerCase();
+        const assets = (process.env.MM_ASSETS || 'btc').replace(/,/g, '_').toLowerCase();
+        const durationPart = duration && ['5m', '15m'].includes(duration) ? `-${duration}` : '';
+        logFilePath = join(LOG_DIR, `events-${mode}${durationPart}-${assets}-${date}.log`);
+    }
     return logFilePath;
 }
 
@@ -128,7 +134,8 @@ function getStatusBarContent() {
     return base;
 }
 
-export function initDashboard() {
+export function initDashboard(opts = {}) {
+    botType = opts?.bot === 'sniper' ? 'sniper' : 'mm';
     plainMode = !process.stdout.isTTY;
 
     // Key handling (only when TTY)
@@ -180,7 +187,7 @@ export function initDashboard() {
     statusLeftContent = '\n {gray}Initializing...{/gray}';
     statusRightContent = '\n {gray}Initializing...{/gray}';
     if (plainMode) {
-        process.stdout.write(blessedToAnsi(statusContent.trim()) + '\n');
+        process.stdout.write(blessedToAnsi(statusLeftContent.trim()) + '\n');
     } else {
         renderScreen();
     }
@@ -257,7 +264,9 @@ function renderScreen() {
 
     const fullSep = ANSI.dim + '─'.repeat(Math.min(w, 200)) + ANSI.reset;
     const leftHeader = ANSI.yellow + ' BALANCE & CONFIG ' + ANSI.reset;
-    const rightHeader = ANSI.yellow + ' ACTIVE POSITIONS ' + ANSI.reset;
+    const rightHeader = botType === 'sniper'
+        ? ANSI.yellow + ' SNIPE ORDERS ' + ANSI.reset
+        : ANSI.yellow + ' ACTIVE POSITIONS ' + ANSI.reset;
     const logHeader = ANSI.cyan + ' LIVE EVENTS ' + ANSI.reset;
 
     const headerRow = padOrTruncate(leftHeader, leftW) + ' ' + sep + ' ' + padOrTruncate(rightHeader, rightW);
