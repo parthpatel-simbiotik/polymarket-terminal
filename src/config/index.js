@@ -61,6 +61,10 @@ const config = {
   mmEntryWindow:   parseInt(  process.env.MM_ENTRY_WINDOW   || '45', 10), // max secs after open
   mmPollInterval:  parseInt(  process.env.MM_POLL_INTERVAL  || '10', 10) * 1000,
 
+  // ── Liquidity Check (pre-entry filter) ───────────────────────
+  mmLiquidityCheck:      process.env.MM_LIQUIDITY_CHECK !== 'false', // enabled by default
+  mmMinLiquiditySpread:  parseFloat(process.env.MM_MIN_LIQUIDITY_SPREAD || '0.20'), // max spread to allow entry
+
   // ── Recovery Buy (after cut-loss) ─────────────────────────────
   // When enabled: after cutting loss, monitor prices for 10s and
   // market-buy the dominant side if it's above threshold and rising/stable.

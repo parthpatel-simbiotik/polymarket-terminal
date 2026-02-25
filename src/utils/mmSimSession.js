@@ -128,8 +128,29 @@ export function writeSessionExcel(data, outputDir = DATA_DIR) {
 
     const wb = XLSX.utils.book_new();
 
-    // Summary
+    // Summary — compute enhanced stats from positions
     const totalPnl = (data.balance - data.startBalance);
+    const closedPositions = data.positions.filter((p) => p.status === 'closed');
+    const bothFilledCount = closedPositions.filter((p) => p.exitType === 'both_filled').length;
+    const totalClosed = closedPositions.length;
+    const bothFillRate = totalClosed > 0 ? ((bothFilledCount / totalClosed) * 100).toFixed(1) : '0.0';
+
+    const spreadsAtEntry = closedPositions
+        .flatMap((p) => [p.yesSpreadAtEntry, p.noSpreadAtEntry])
+        .filter((v) => v != null && !isNaN(v));
+    const avgSpreadAtEntry = spreadsAtEntry.length > 0
+        ? (spreadsAtEntry.reduce((a, b) => a + b, 0) / spreadsAtEntry.length).toFixed(4) : 'N/A';
+
+    const skippedLiq = data.records.filter((r) => r.type === 'skip_low_liquidity').length;
+
+    const firstFills = closedPositions.map((p) => p.timeToFirstFill).filter((v) => v != null);
+    const avgFirstFill = firstFills.length > 0
+        ? (firstFills.reduce((a, b) => a + b, 0) / firstFills.length).toFixed(1) : 'N/A';
+
+    const secondFills = closedPositions.map((p) => p.timeToSecondFill).filter((v) => v != null);
+    const avgSecondFill = secondFills.length > 0
+        ? (secondFills.reduce((a, b) => a + b, 0) / secondFills.length).toFixed(1) : 'N/A';
+
     const summary = [
         ['MM Simulation Session Summary', ''],
         ['Session ID', data.id],
@@ -144,6 +165,13 @@ export function writeSessionExcel(data, outputDir = DATA_DIR) {
         ['Records', data.records.length],
         ['Orders', data.orders.length],
         ['Positions', data.positions.length],
+        ['', ''],
+        ['── Market Quality Metrics ──', ''],
+        ['Both-Fill Rate (%)', `${bothFillRate}%`],
+        ['Avg Spread at Entry', avgSpreadAtEntry],
+        ['Markets Skipped (Low Liq)', skippedLiq],
+        ['Avg Time to First Fill (s)', avgFirstFill],
+        ['Avg Time to Second Fill (s)', avgSecondFill],
     ];
     const wsSummary = XLSX.utils.aoa_to_sheet(summary);
     XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
@@ -167,9 +195,10 @@ export function writeSessionExcel(data, outputDir = DATA_DIR) {
     const wsRecords = XLSX.utils.aoa_to_sheet(recordRows);
     XLSX.utils.book_append_sheet(wb, wsRecords, 'Records');
 
-    // Orders
+    // Orders (with new spread/midpoint columns)
     if (data.orders.length > 0) {
-        const orderKeys = ['time', 'market', 'side', 'orderType', 'price', 'shares', 'status', 'pnl'];
+        const orderKeys = ['time', 'market', 'side', 'orderType', 'price', 'shares', 'status', 'pnl',
+            'midpointAtOrder', 'spreadAtOrder', 'bestBid', 'bestAsk'];
         const orderRows = [
             orderKeys,
             ...data.orders.map((o) => orderKeys.map((k) => (o[k] != null ? o[k] : ''))),
@@ -178,9 +207,11 @@ export function writeSessionExcel(data, outputDir = DATA_DIR) {
         XLSX.utils.book_append_sheet(wb, wsOrders, 'Orders');
     }
 
-    // Positions
+    // Positions (with new tracking columns)
     if (data.positions.length > 0) {
-        const posKeys = ['time', 'market', 'conditionId', 'entryCost', 'yesShares', 'noShares', 'status', 'exitReason', 'pnl', 'endTime'];
+        const posKeys = ['time', 'market', 'conditionId', 'entryCost', 'yesShares', 'noShares', 'status', 'exitReason', 'pnl', 'endTime',
+            'yesSpreadAtEntry', 'noSpreadAtEntry', 'yesMidAtEntry', 'noMidAtEntry',
+            'yesMidAtExit', 'noMidAtExit', 'exitType', 'fillCount', 'timeToFirstFill', 'timeToSecondFill'];
         const posRows = [
             posKeys,
             ...data.positions.map((p) => posKeys.map((k) => (p[k] != null ? p[k] : ''))),
