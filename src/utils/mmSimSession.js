@@ -21,16 +21,20 @@ function nowIso() {
 /**
  * Start a new simulation session with starting balance.
  * @param {number} startingBalance - USDC
+ * @param {{ assets?: string, duration?: string }} [opts] - e.g. { assets: 'btc,eth', duration: '5m' }
  */
-export function startSession(startingBalance) {
+export function startSession(startingBalance, opts = {}) {
     const bal = Number(startingBalance);
     if (Number.isNaN(bal) || bal < 0) throw new Error('startSession: startingBalance must be a non-negative number');
+    const { assets = '', duration = '' } = opts;
     session = {
         id: new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19),
         startTime: nowIso(),
         endTime: null,
         startBalance: bal,
         balance: bal,
+        assets: String(assets).replace(/,/g, '_') || 'btc',
+        duration: String(duration) || '5m',
         records: [],
         orders: [],
         positions: [],
@@ -129,6 +133,8 @@ export function writeSessionExcel(data, outputDir = DATA_DIR) {
     const summary = [
         ['MM Simulation Session Summary', ''],
         ['Session ID', data.id],
+        ['Assets', data.assets || ''],
+        ['Duration', data.duration || ''],
         ['Start', data.startTime],
         ['End', data.endTime || ''],
         ['Start Balance (USDC)', data.startBalance],
@@ -188,7 +194,9 @@ export function writeSessionExcel(data, outputDir = DATA_DIR) {
     } catch {
         // ignore
     }
-    const filename = `mm-sim-${data.id}.xlsx`;
+    const assetsPart = data.assets ? `-${data.assets}` : '';
+    const durationPart = data.duration ? `-${data.duration}` : '';
+    const filename = `mm-sim${assetsPart}${durationPart}-${data.id}.xlsx`;
     const filepath = join(outputDir, filename);
     XLSX.writeFile(wb, filepath);
     return filepath;

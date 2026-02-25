@@ -5,6 +5,7 @@
  * Run with: npm run mm       (live)
  *           npm run mm-sim   (simulation / dry-run)
  *           npm run mm-sim -- --balance 500   (sim with starting balance 500 USDC)
+ *           npm run mm-sim -- --assets btc,eth   (dynamic assets)
  */
 
 import { validateMMConfig } from './config/index.js';
@@ -18,15 +19,25 @@ import { getUsdcBalance } from './services/client.js';
 import { cleanupOpenPositions, redeemMMPositions, MIN_SHARES_PER_SIDE } from './services/ctf.js';
 import { startSession, getSession, getBalance, endSession, writeSessionExcel } from './utils/mmSimSession.js';
 
-// ── Parse CLI: --balance / -b for simulation starting balance ─────────────────
+// ── Parse CLI ───────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
     if ((argv[i] === '--balance' || argv[i] === '-b') && argv[i + 1]) {
         const val = parseFloat(argv[i + 1]);
         if (!Number.isNaN(val) && val >= 0) config.simBalance = val;
-        break;
+    }
+    if ((argv[i] === '--assets' || argv[i] === '-a') && argv[i + 1]) {
+        const assets = argv[i + 1]
+            .split(',')
+            .map((s) => s.trim().toLowerCase())
+            .filter(Boolean);
+        if (assets.length > 0) {
+            config.mmAssets = assets;
+            process.env.MM_ASSETS = assets.join(',');
+        }
     }
 }
+if (!process.env.MM_ASSETS) process.env.MM_ASSETS = config.mmAssets.join(',');
 
 // ── Validate config ────────────────────────────────────────────────────────────
 
@@ -85,8 +96,11 @@ if (config.mmTradeSize < MIN_SHARES_PER_SIDE) {
 
 // ── Simulation session (dry-run only) ─────────────────────────────────────────
 if (config.dryRun) {
-    startSession(config.simBalance);
-    logger.info(`MM[SIM]: session started with balance $${config.simBalance.toFixed(2)}`);
+    startSession(config.simBalance, {
+        assets: config.mmAssets.join(','),
+        duration: config.mmDuration,
+    });
+    logger.info(`MM[SIM]: session started | balance $${config.simBalance.toFixed(2)} | assets: ${config.mmAssets.join(', ').toUpperCase()} | ${config.mmDuration}`);
 }
 
 // ── Cleanup leftover positions on startup ─────────────────────────────────────
@@ -100,73 +114,74 @@ try {
 // ── Status panel refresh ──────────────────────────────────────────────────────
 
 async function buildStatusContent() {
-    let lines = [];
+    const leftLines = [];
+    const rightLines = [];
 
-    // Balance
+    // Left: Balance
     let balance = '?';
     if (!config.dryRun) {
         try { balance = (await getUsdcBalance()).toFixed(2); } catch { /* ignore */ }
     } else {
         balance = `${getBalance().toFixed(2)} {gray-fg}(sim){/gray-fg}`;
     }
-    lines.push(`{bold}BALANCE{/bold}`);
-    lines.push(`  USDC.e: {green-fg}$${balance}{/green-fg}`);
-    lines.push('');
+    leftLines.push(`{bold}BALANCE{/bold}`);
+    leftLines.push(`  USDC.e: {green-fg}$${balance}{/green-fg}`);
+    leftLines.push('');
 
-    // Mode
-    lines.push(`{bold}MODE{/bold}`);
-    lines.push(`  ${config.dryRun ? '{yellow-fg}SIMULATION{/yellow-fg}' : '{green-fg}LIVE{/green-fg}'}`);
-    lines.push('');
+    // Left: Mode
+    leftLines.push(`{bold}MODE{/bold}`);
+    leftLines.push(`  ${config.dryRun ? '{yellow-fg}SIMULATION{/yellow-fg}' : '{green-fg}LIVE{/green-fg}'}`);
+    leftLines.push('');
 
-    // MM Config
-    lines.push(`{bold}MM CONFIG{/bold}`);
-    lines.push(`  Assets   : ${config.mmAssets.join(', ').toUpperCase()}`);
-    lines.push(`  Duration : ${config.mmDuration}`);
-    lines.push(`  Trade sz : $${config.mmTradeSize} per side`);
-    lines.push(`  Sell @   : $${config.mmSellPrice}`);
-    lines.push(`  Cut loss : ${config.mmCutLossTime}s before close`);
-    lines.push('');
+    // Left: MM Config
+    leftLines.push(`{bold}MM CONFIG{/bold}`);
+    leftLines.push(`  Assets   : ${config.mmAssets.join(', ').toUpperCase()}`);
+    leftLines.push(`  Duration : ${config.mmDuration}`);
+    leftLines.push(`  Trade sz : $${config.mmTradeSize} per side`);
+    leftLines.push(`  Sell @   : $${config.mmSellPrice}`);
+    leftLines.push(`  Cut loss : ${config.mmCutLossTime}s before close`);
 
-    // Active positions
+    // Right: Active positions
     const positions = getActiveMMPositions();
-    lines.push(`{bold}ACTIVE POSITIONS (${positions.length}){/bold}`);
+    rightLines.push(`{bold}(${positions.length}){/bold}`);
 
     if (positions.length === 0) {
-        lines.push('  {gray-fg}Waiting for market...{/gray-fg}');
+        rightLines.push('  {gray-fg}Waiting for market...{/gray-fg}');
     } else {
         for (const pos of positions) {
             const assetTag = pos.asset ? `[${pos.asset.toUpperCase()}] ` : '';
-            const label = pos.question.substring(0, 32);
+            const label = pos.question.substring(0, 28);
             const msLeft = new Date(pos.endTime).getTime() - Date.now();
             const secsLeft = Math.max(0, Math.round(msLeft / 1000));
             const timeStr = secsLeft > 60
                 ? `${Math.floor(secsLeft / 60)}m${secsLeft % 60}s`
                 : `{red-fg}${secsLeft}s{/red-fg}`;
 
-            lines.push(`  {cyan-fg}${assetTag}${label}{/cyan-fg}`);
-            lines.push(`  Status : ${pos.status} | Time left: ${timeStr}`);
+            rightLines.push(`  {cyan-fg}${assetTag}${label}{/cyan-fg}`);
+            rightLines.push(`  ${pos.status} | ${timeStr}`);
 
             // YES side
             const yFill = pos.yes.filled
                 ? `{green-fg}FILLED @ $${pos.yes.fillPrice?.toFixed(3)}{/green-fg}`
                 : `{yellow-fg}waiting $${config.mmSellPrice}{/yellow-fg}`;
-            lines.push(`  YES  ${pos.yes.shares?.toFixed(3)} sh @ $${pos.yes.entryPrice?.toFixed(3)} → ${yFill}`);
 
             // NO side
             const nFill = pos.no.filled
                 ? `{green-fg}FILLED @ $${pos.no.fillPrice?.toFixed(3)}{/green-fg}`
                 : `{yellow-fg}waiting $${config.mmSellPrice}{/yellow-fg}`;
-            lines.push(`  NO   ${pos.no.shares?.toFixed(3)} sh @ $${pos.no.entryPrice?.toFixed(3)} → ${nFill}`);
-
-            lines.push('');
+            rightLines.push(`  Y:${pos.yes.shares?.toFixed(2)}→${yFill} N:${pos.no.shares?.toFixed(2)}→${nFill}`);
+            rightLines.push('');
         }
     }
 
-    return '\n' + lines.join('\n');
+    return {
+        left: '\n' + leftLines.join('\n'),
+        right: '\n' + rightLines.join('\n'),
+    };
 }
 
 let refreshTimer = null;
-let redeemTimer  = null;
+let redeemTimer = null;
 
 function startRefresh() {
     refreshTimer = setInterval(async () => {
@@ -206,7 +221,7 @@ async function runStrategy(market) {
     if (queued) {
         pendingByAsset.delete(market.asset);
 
-        const endMs    = new Date(queued.endTime).getTime();
+        const endMs = new Date(queued.endTime).getTime();
         const secsLeft = Math.round((endMs - Date.now()) / 1000);
 
         if (secsLeft > config.mmCutLossTime) {

@@ -32,7 +32,8 @@ let active = false;
 let plainMode = false;
 let logLines = [];
 const MAX_LOG_LINES = 1000;
-let statusContent = '\n {gray}Initializing...{/gray}';
+let statusLeftContent = '\n {gray}Initializing...{/gray}';
+let statusRightContent = '\n {gray}Initializing...{/gray}';
 const keyHandlers = new Map();
 let lastStatusPrintMs = -60_000;
 const STATUS_PRINT_INTERVAL_MS = 30_000;
@@ -42,9 +43,10 @@ function getLogFilePath() {
     if (logFilePath) return logFilePath;
     const mode = process.env.DRY_RUN === 'true' ? 'sim' : 'live';
     const duration = process.env.MM_DURATION?.toLowerCase();
+    const assets = (process.env.MM_ASSETS || 'btc').replace(/,/g, '_').toLowerCase();
     const date = new Date().toISOString().slice(0, 10);
     const durationPart = duration && ['5m', '15m'].includes(duration) ? `-${duration}` : '';
-    logFilePath = join(LOG_DIR, `events-${mode}${durationPart}-${date}.log`);
+    logFilePath = join(LOG_DIR, `events-${mode}${durationPart}-${assets}-${date}.log`);
     return logFilePath;
 }
 
@@ -118,7 +120,7 @@ function padOrTruncate(str, width) {
 
 function getStatusBarContent() {
     const base =
-        ` ${ANSI.gray}powered by${ANSI.reset} ${ANSI.cyan}@direkturcrypto | @parthpatel5${ANSI.reset} ${ANSI.gray}terminal${ANSI.reset}` +
+        ` ${ANSI.gray}powered by${ANSI.reset} ${ANSI.cyan}@parthpatel5${ANSI.reset} ${ANSI.gray}terminal${ANSI.reset}` +
         `  ${ANSI.gray}Ctrl+C / q = exit${ANSI.reset}`;
     if (keyHandlers.has('x')) {
         return base + `  ${ANSI.gray}|  X = exit, redeem and quit${ANSI.reset}`;
@@ -175,7 +177,8 @@ export function initDashboard() {
     }
 
     active = true;
-    statusContent = '\n {gray}Initializing...{/gray}';
+    statusLeftContent = '\n {gray}Initializing...{/gray}';
+    statusRightContent = '\n {gray}Initializing...{/gray}';
     if (plainMode) {
         process.stdout.write(blessedToAnsi(statusContent.trim()) + '\n');
     } else {
@@ -201,17 +204,26 @@ export function appendLog(text) {
     renderScreen();
 }
 
-/** Replace the bottom-panel (positions & balance) content */
+/** Replace the top-panel content. Pass { left, right } for two columns or a string for legacy. */
 export function updateStatus(content) {
     if (!active) return;
-    statusContent = content || '';
+    if (typeof content === 'object' && content !== null && ('left' in content || 'right' in content)) {
+        if (content.left !== undefined) statusLeftContent = content.left || '';
+        if (content.right !== undefined) statusRightContent = content.right || '';
+    } else {
+        statusLeftContent = String(content || '');
+        statusRightContent = '';
+    }
     if (plainMode) {
         const now = Date.now();
         if (now - lastStatusPrintMs >= STATUS_PRINT_INTERVAL_MS) {
             lastStatusPrintMs = now;
-            const lines = blessedToAnsi(statusContent.trim()).split('\n');
+            const leftLines = blessedToAnsi(statusLeftContent.trim()).split('\n');
+            const rightLines = blessedToAnsi(statusRightContent.trim()).split('\n');
             process.stdout.write('--- STATUS ---\n');
-            for (const line of lines) process.stdout.write(line + '\n');
+            for (let i = 0; i < Math.max(leftLines.length, rightLines.length); i++) {
+                process.stdout.write((leftLines[i] || '') + ' | ' + (rightLines[i] || '') + '\n');
+            }
             process.stdout.write('---\n');
         }
         return;
@@ -230,24 +242,34 @@ function renderScreen() {
         return;
     }
 
-    const fixedRows = 7;
+    const fixedRows = 8;
     const totalContent = Math.max(2, h - fixedRows - 2);
-    const statusRows = Math.max(4, Math.floor(totalContent * 0.50));
+    const statusRows = Math.max(6, Math.floor(totalContent * 0.45));
     const logRows = Math.max(2, totalContent - statusRows);
 
-    const statusLines = statusContent.trim().split('\n');
+    const leftW = Math.floor(w * 0.45);
+    const rightW = w - leftW - 3;
+    const sep = ANSI.dim + '│' + ANSI.reset;
+
+    const leftLines = statusLeftContent.trim().split('\n');
+    const rightLines = statusRightContent.trim().split('\n');
     const visibleLog = logLines.slice(-logRows);
 
-    const sep = ANSI.dim + '─'.repeat(Math.min(w, 200)) + ANSI.reset;
-    const statusHeader = ANSI.yellow + ' POSITIONS & BALANCE ' + ANSI.reset;
+    const fullSep = ANSI.dim + '─'.repeat(Math.min(w, 200)) + ANSI.reset;
+    const leftHeader = ANSI.yellow + ' BALANCE & CONFIG ' + ANSI.reset;
+    const rightHeader = ANSI.yellow + ' ACTIVE POSITIONS ' + ANSI.reset;
     const logHeader = ANSI.cyan + ' LIVE EVENTS ' + ANSI.reset;
 
-    const rows = [statusHeader, sep];
+    const headerRow = padOrTruncate(leftHeader, leftW) + ' ' + sep + ' ' + padOrTruncate(rightHeader, rightW);
+    const rows = [headerRow, fullSep];
     for (let i = 0; i < statusRows; i++) {
-        const line = statusLines[i] ?? '';
-        rows.push(padOrTruncate(blessedToAnsi(line), w));
+        const leftLine = leftLines[i] ?? '';
+        const rightLine = rightLines[i] ?? '';
+        const left = padOrTruncate(blessedToAnsi(leftLine), leftW);
+        const right = padOrTruncate(blessedToAnsi(rightLine), rightW);
+        rows.push(left + ' ' + sep + ' ' + right);
     }
-    rows.push(sep, logHeader, sep);
+    rows.push(fullSep, logHeader, fullSep);
     for (let i = 0; i < logRows; i++) {
         const line = visibleLog[i] ?? '';
         rows.push(padOrTruncate(blessedToAnsi(line), w));
