@@ -3,4 +3,5 @@ node_modules/
 data/*.json
 data/*.xlsx
 data/logs/
+data/snapshot-caches/
 .DS_Store

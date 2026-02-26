@@ -27,7 +27,9 @@
     "mm-dev": "cross-env DRY_RUN=true nodemon --ignore data/*.json src/mm.js",
     "sniper": "cross-env DRY_RUN=false node src/sniper.js",
     "sniper-sim": "cross-env DRY_RUN=true node src/sniper.js",
-    "sniper-dev": "cross-env DRY_RUN=true nodemon --ignore data/*.json src/sniper.js"
+    "sniper-dev": "cross-env DRY_RUN=true nodemon --ignore data/*.json src/sniper.js",
+    "mm-backtest-5m": "node src/backtest/mmBacktest.js --duration 5m",
+    "mm-backtest-15m": "node src/backtest/mmBacktest.js --duration 15m"
   },
   "keywords": [
     "polymarket",
