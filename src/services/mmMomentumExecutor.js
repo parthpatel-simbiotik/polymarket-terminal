@@ -449,7 +449,8 @@ export async function executeMomentumStrategy(market) {
 
     // Record close
     if (config.dryRun) {
-        const totalPnl = pos.exitPrice ? (pos.exitPrice - pos.entryPrice) * pos.shares : 0;
+        const cost = pos.entryPrice * pos.shares;
+        const totalPnl = pos.proceeds ? pos.proceeds - cost : (pos.exitPrice ? (pos.exitPrice - pos.entryPrice) * pos.shares : 0);
         recordPosition({
             market: label, conditionId, entryCost: needed,
             side: side.toUpperCase(), shares, entryPrice,
