@@ -57,11 +57,20 @@ async function marketBuy(tokenId, amount, tickSize, negRisk) {
         try {
             const client = getClient();
             const mp = await client.getMidpoint(tokenId);
-            const price = parseFloat(mp?.mid ?? mp ?? '0') || 0.60;
-            const shares = amount / price;
-            return { success: true, fillPrice: price, shares };
+            const mid = parseFloat(mp?.mid ?? mp ?? '0');
+            // Use best ask from orderbook for more realistic sim fill
+            const ob = await client.getOrderBook(tokenId);
+            const asks = ob?.asks || [];
+            let bestAsk = 0;
+            for (const a of asks) {
+                const p = parseFloat(a.price);
+                if (p > 0 && (bestAsk === 0 || p < bestAsk)) bestAsk = p;
+            }
+            const fillPrice = bestAsk > 0 ? bestAsk : (mid > 0 ? mid : 0.50);
+            const shares = amount / fillPrice;
+            return { success: true, fillPrice, shares };
         } catch {
-            return { success: true, fillPrice: 0.60, shares: amount / 0.60 };
+            return { success: true, fillPrice: 0.50, shares: amount / 0.50 };
         }
     }
 
@@ -73,9 +82,11 @@ async function marketBuy(tokenId, amount, tickSize, negRisk) {
             OrderType.FOK,
         );
         if (!res?.success) return { success: false, fillPrice: 0, shares: 0 };
-        const fillPrice = parseFloat(res.price || '0.60');
-        const shares = parseFloat(res.takingAmount || String(amount / fillPrice));
-        return { success: true, fillPrice, shares };
+        const shares = parseFloat(res.takingAmount || '0');
+        // Derive avg fill price from amount spent / shares received
+        const apiPrice = parseFloat(res.price || '0');
+        const fillPrice = shares > 0 ? amount / shares : (apiPrice > 0 ? apiPrice : 0);
+        return { success: true, fillPrice, shares: shares > 0 ? shares : (fillPrice > 0 ? amount / fillPrice : 0) };
     } catch (err) {
         logger.error('MOM market buy error:', err.message);
         return { success: false, fillPrice: 0, shares: 0 };
@@ -88,9 +99,11 @@ async function marketSell(tokenId, shares, tickSize, negRisk) {
             const client = getClient();
             const mp = await client.getMidpoint(tokenId);
             const price = parseFloat(mp?.mid ?? mp ?? '0') || 0.50;
-            return { success: true, fillPrice: price };
+            const proceeds = price * shares;
+            return { success: true, fillPrice: price, proceeds };
         } catch {
-            return { success: true, fillPrice: 0.50 };
+            const proceeds = 0.50 * shares;
+            return { success: true, fillPrice: 0.50, proceeds };
         }
     }
 
@@ -101,57 +114,16 @@ async function marketSell(tokenId, shares, tickSize, negRisk) {
             { tickSize, negRisk },
             OrderType.FOK,
         );
-        if (!res?.success) return { success: false, fillPrice: 0 };
-        return { success: true, fillPrice: parseFloat(res.price || '0') };
+        if (!res?.success) return { success: false, fillPrice: 0, proceeds: 0 };
+        const usdcReceived = parseFloat(res.takingAmount || '0');
+        const sharesSold = parseFloat(res.makingAmount || '0') || shares;
+        const apiPrice = parseFloat(res.price || '0');
+        const fillPrice = usdcReceived > 0 ? usdcReceived / sharesSold : (apiPrice > 0 ? apiPrice : 0);
+        const proceeds = usdcReceived > 0 ? usdcReceived : fillPrice * shares;
+        return { success: true, fillPrice, proceeds };
     } catch (err) {
         logger.error('MOM market sell error:', err.message);
-        return { success: false, fillPrice: 0 };
-    }
-}
-
-async function placeLimitSell(tokenId, shares, price, tickSize, negRisk) {
-    if (config.dryRun) {
-        return { success: true, orderId: `sim-${Date.now()}-${tokenId.slice(-6)}` };
-    }
-
-    const client = getClient();
-    try {
-        const res = await client.createAndPostOrder(
-            { tokenID: tokenId, side: Side.SELL, price, size: shares },
-            { tickSize, negRisk },
-            OrderType.GTC,
-        );
-        if (!res?.success) return { success: false };
-        return { success: true, orderId: res.orderID };
-    } catch (err) {
-        logger.error('MOM limit sell error:', err.message);
-        return { success: false };
-    }
-}
-
-async function cancelOrder(orderId) {
-    if (config.dryRun || !orderId || orderId.startsWith('sim-')) return true;
-    try {
-        const client = getClient();
-        await client.cancelOrder({ orderID: orderId });
-        return true;
-    } catch (err) {
-        logger.warn('MOM cancel order error:', err.message);
-        return false;
-    }
-}
-
-async function isOrderFilled(orderId, shares) {
-    if (!orderId || orderId.startsWith('sim-')) return false;
-    try {
-        const client = getClient();
-        const order = await client.getOrder(orderId);
-        if (!order) return false;
-        if (order.status === 'MATCHED') return true;
-        const matched = parseFloat(order.size_matched || '0');
-        return matched >= shares * 0.99;
-    } catch {
-        return false;
+        return { success: false, fillPrice: 0, proceeds: 0 };
     }
 }
 
@@ -305,34 +277,22 @@ async function monitorPosition(pos) {
             currentPrice = parseFloat(mp?.mid ?? mp ?? '0') || pos.entryPrice;
         } catch { /* use last known */ }
 
-        // Check if limit sell order was filled (live mode)
-        if (pos.exitOrderId && !pos.exitOrderId.startsWith('sim-')) {
-            const filled = await isOrderFilled(pos.exitOrderId, pos.shares);
-            if (filled) {
-                pos.exitPrice = exitTarget;
-                pos.status = 'done';
-                pos.exitType = 'target_hit';
-                const pnl = (pos.exitPrice - pos.entryPrice) * pos.shares;
-                logger.money(`MOM${tag}: ${sim} TARGET HIT! ${pos.side.toUpperCase()} sold @ $${pos.exitPrice.toFixed(3)} | P&L $${pnl.toFixed(2)}`);
-                if (config.dryRun) {
-                    const proceeds = pos.exitPrice * pos.shares;
-                    recordEvent({ type: 'mom_target_sell', amount: proceeds, pnl, market: label, side: pos.side.toUpperCase(), shares: pos.shares, price: pos.exitPrice });
-                    recordOrder({ market: label, side: pos.side.toUpperCase(), orderType: 'limit_sell', price: pos.exitPrice, shares: pos.shares, status: 'filled', pnl });
-                }
-                break;
-            }
-        }
-
-        // Sim mode: check if price hit target
-        if (config.dryRun && currentPrice >= exitTarget) {
-            pos.exitPrice = exitTarget;
+        // Target hit — market sell when price reaches exit target
+        if (currentPrice >= exitTarget) {
+            logger.info(`MOM${tag}: ${sim} target reached $${currentPrice.toFixed(3)} ≥ $${exitTarget} — market selling`);
+            const sellShares = config.dryRun ? pos.shares : ((await getTokenBalance(pos.tokenId)) ?? pos.shares);
+            const result = await marketSell(pos.tokenId, sellShares, pos.tickSize, pos.negRisk);
+            pos.exitPrice = result.fillPrice;
+            pos.proceeds = result.proceeds;
             pos.status = 'done';
             pos.exitType = 'target_hit';
-            const pnl = (pos.exitPrice - pos.entryPrice) * pos.shares;
-            logger.money(`MOM${tag}: ${sim} TARGET HIT! ${pos.side.toUpperCase()} sold @ $${pos.exitPrice.toFixed(3)} | P&L $${pnl.toFixed(2)}`);
-            const proceeds = pos.exitPrice * pos.shares;
-            recordEvent({ type: 'mom_target_sell', amount: proceeds, pnl, market: label, side: pos.side.toUpperCase(), shares: pos.shares, price: pos.exitPrice });
-            recordOrder({ market: label, side: pos.side.toUpperCase(), orderType: 'limit_sell', price: pos.exitPrice, shares: pos.shares, status: 'filled', pnl });
+            const cost = pos.entryPrice * pos.shares;
+            const pnl = result.proceeds - cost;
+            logger.money(`MOM${tag}: ${sim} TARGET HIT! ${pos.side.toUpperCase()} sold @ $${pos.exitPrice.toFixed(3)} | proceeds $${result.proceeds.toFixed(2)} | P&L $${pnl.toFixed(2)}`);
+            if (config.dryRun) {
+                recordEvent({ type: 'mom_target_sell', amount: result.proceeds, pnl, market: label, side: pos.side.toUpperCase(), shares: pos.shares, price: pos.exitPrice });
+                recordOrder({ market: label, side: pos.side.toUpperCase(), orderType: 'market_sell', price: pos.exitPrice, shares: pos.shares, status: 'filled', pnl });
+            }
             break;
         }
 
@@ -345,16 +305,17 @@ async function monitorPosition(pos) {
                 if (highBid > pos.entryPrice && bid < threshold) {
                     logger.info(`MOM${tag}: ${sim} trail stop — bid $${bid.toFixed(3)} < high $${highBid.toFixed(3)} * ${(1 - trailDropPct).toFixed(2)}`);
 
-                    if (pos.exitOrderId) await cancelOrder(pos.exitOrderId);
-                    const result = await marketSell(pos.tokenId, pos.shares, pos.tickSize, pos.negRisk);
+                    const sellShares = config.dryRun ? pos.shares : ((await getTokenBalance(pos.tokenId)) ?? pos.shares);
+                    const result = await marketSell(pos.tokenId, sellShares, pos.tickSize, pos.negRisk);
                     pos.exitPrice = result.fillPrice;
+                    pos.proceeds = result.proceeds;
                     pos.status = 'done';
                     pos.exitType = 'trail_stop';
-                    const pnl = (pos.exitPrice - pos.entryPrice) * pos.shares;
-                    logger.money(`MOM${tag}: ${sim} trail sold @ $${pos.exitPrice.toFixed(3)} | P&L $${pnl.toFixed(2)}`);
+                    const cost = pos.entryPrice * pos.shares;
+                    const pnl = result.proceeds - cost;
+                    logger.money(`MOM${tag}: ${sim} trail sold @ $${pos.exitPrice.toFixed(3)} | proceeds $${result.proceeds.toFixed(2)} | P&L $${pnl.toFixed(2)}`);
                     if (config.dryRun) {
-                        const proceeds = pos.exitPrice * pos.shares;
-                        recordEvent({ type: 'mom_trail_sell', amount: proceeds, pnl, market: label, side: pos.side.toUpperCase(), shares: pos.shares, price: pos.exitPrice });
+                        recordEvent({ type: 'mom_trail_sell', amount: result.proceeds, pnl, market: label, side: pos.side.toUpperCase(), shares: pos.shares, price: pos.exitPrice });
                         recordOrder({ market: label, side: pos.side.toUpperCase(), orderType: 'market_sell', price: pos.exitPrice, shares: pos.shares, status: 'filled', pnl });
                     }
                     break;
@@ -366,18 +327,17 @@ async function monitorPosition(pos) {
         if (msRemaining <= config.momCutLossTime * 1000) {
             logger.warn(`MOM${tag}: ${sim} cut-loss triggered (${Math.round(msRemaining / 1000)}s left)`);
 
-            if (pos.exitOrderId) await cancelOrder(pos.exitOrderId);
-
             const sellShares = config.dryRun ? pos.shares : ((await getTokenBalance(pos.tokenId)) ?? pos.shares);
             const result = await marketSell(pos.tokenId, sellShares, pos.tickSize, pos.negRisk);
             pos.exitPrice = result.fillPrice;
+            pos.proceeds = result.proceeds;
             pos.status = 'done';
             pos.exitType = 'cut_loss';
-            const pnl = (pos.exitPrice - pos.entryPrice) * pos.shares;
-            logger.warn(`MOM${tag}: ${sim} cut @ $${pos.exitPrice.toFixed(3)} | P&L $${pnl.toFixed(2)}`);
+            const cost = pos.entryPrice * pos.shares;
+            const pnl = result.proceeds - cost;
+            logger.warn(`MOM${tag}: ${sim} cut @ $${pos.exitPrice.toFixed(3)} | proceeds $${result.proceeds.toFixed(2)} | P&L $${pnl.toFixed(2)}`);
             if (config.dryRun) {
-                const proceeds = pos.exitPrice * sellShares;
-                recordEvent({ type: 'mom_cut_loss', amount: proceeds, pnl, market: label, side: pos.side.toUpperCase(), shares: sellShares, price: pos.exitPrice });
+                recordEvent({ type: 'mom_cut_loss', amount: result.proceeds, pnl, market: label, side: pos.side.toUpperCase(), shares: sellShares, price: pos.exitPrice });
                 recordOrder({ market: label, side: pos.side.toUpperCase(), orderType: 'market_sell', price: pos.exitPrice, shares: sellShares, status: 'filled', pnl });
             }
             break;
@@ -387,7 +347,8 @@ async function monitorPosition(pos) {
     }
 
     // Final P&L
-    const totalPnl = pos.exitPrice ? (pos.exitPrice - pos.entryPrice) * pos.shares : 0;
+    const cost = pos.entryPrice * pos.shares;
+    const totalPnl = pos.proceeds ? pos.proceeds - cost : (pos.exitPrice ? (pos.exitPrice - pos.entryPrice) * pos.shares : 0);
     const sign = totalPnl >= 0 ? '+' : '';
     if (pos.status !== 'done') {
         logger.info(`MOM${tag}: strategy ended (${pos.status}) | P&L: ${sign}$${totalPnl.toFixed(2)} | ${label}`);
@@ -448,14 +409,7 @@ export async function executeMomentumStrategy(market) {
         recordOrder({ market: label, side: side.toUpperCase(), orderType: 'market_buy', price: entryPrice, shares, status: 'filled' });
     }
 
-    // Place limit sell at exit target
-    let exitOrderId = null;
-    const exitTarget = config.momExitTarget;
-    logger.info(`MOM${tag}: ${sim}placing limit sell @ $${exitTarget}`);
-    const sellResult = await placeLimitSell(tokenId, shares, exitTarget, tickSize, negRisk);
-    if (sellResult.success) {
-        exitOrderId = sellResult.orderId;
-    }
+    logger.info(`MOM${tag}: ${sim}holding — will market sell at $${config.momExitTarget} or trail/cut-loss`);
 
     // Build position object
     const eventStart = market.eventStartTime ? new Date(market.eventStartTime).getTime() : null;
@@ -478,7 +432,6 @@ export async function executeMomentumStrategy(market) {
         shares,
         exitPrice: null,
         exitType: null,
-        exitOrderId,
     };
 
     activePositions.set(conditionId, pos);

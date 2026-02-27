@@ -47,6 +47,10 @@ function getLogFilePath() {
     if (botType === 'sniper') {
         const assets = (process.env.SNIPER_ASSETS || 'eth_sol_xrp').replace(/,/g, '_').toLowerCase();
         logFilePath = join(LOG_DIR, `events-${mode}-sniper-${assets}-${date}.log`);
+    } else if (botType === 'mom') {
+        const duration = (process.env.MOM_DURATION || process.env.MM_DURATION || '5m').toLowerCase();
+        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        logFilePath = join(LOG_DIR, `mom-${duration}-${mode}-${ts}.log`);
     } else {
         const duration = process.env.MM_DURATION?.toLowerCase();
         const assets = (process.env.MM_ASSETS || 'btc').replace(/,/g, '_').toLowerCase();
@@ -135,7 +139,7 @@ function getStatusBarContent() {
 }
 
 export function initDashboard(opts = {}) {
-    botType = opts?.bot === 'sniper' ? 'sniper' : 'mm';
+    botType = opts?.bot === 'sniper' ? 'sniper' : opts?.bot === 'mom' ? 'mom' : 'mm';
     plainMode = !process.stdout.isTTY;
 
     // Key handling (only when TTY)

@@ -16,7 +16,6 @@ import { initClient, getClient } from './services/client.js';
 import { initDashboard, appendLog, updateStatus, isDashboardActive, registerKeyHandler } from './ui/dashboard.js';
 import { executeMomentumStrategy, getActiveMomentumPositions, getWatchingMarkets, waitForActivePositionsToClose } from './services/mmMomentumExecutor.js';
 import { getUsdcBalance } from './services/client.js';
-import { redeemMMPositions } from './services/ctf.js';
 import { startSession, getSession, getBalance, endSession, writeSessionExcel } from './utils/mmSimSession.js';
 
 // ── Parse CLI ───────────────────────────────────────────────────────────────
@@ -48,21 +47,21 @@ try {
 
 // ── Init TUI ──────────────────────────────────────────────────────────────────
 
-initDashboard();
+initDashboard({ bot: 'mom' });
 logger.setOutput(appendLog);
 
 registerKeyHandler('x', async () => {
     logger.warn('MOM: exiting and quitting...');
     stopDetector();
     if (refreshTimer) clearInterval(refreshTimer);
-    if (redeemTimer) clearInterval(redeemTimer);
-    if (config.dryRun) await waitForActivePositionsToClose();
-    await redeemMMPositions();
-    if (config.dryRun) {
-        const data = endSession();
-        if (data) {
+    await waitForActivePositionsToClose();
+    const data = endSession();
+    if (data) {
+        try {
             const path = writeSessionExcel(data);
             logger.info(`MOM: session saved to ${path}`);
+        } catch (e) {
+            logger.error(`MOM: failed to write session Excel: ${e.message}`);
         }
     }
     logger.info('MOM: quitting in 2s...');
@@ -78,13 +77,17 @@ try {
     process.exit(1);
 }
 
-// ── Simulation session (dry-run only) ─────────────────────────────────────────
-if (config.dryRun) {
-    startSession(config.simBalance, {
+// ── Session tracking (sim and live) ───────────────────────────────────────────
+{
+    const startBal = config.dryRun ? config.simBalance : 0;
+    startSession(startBal, {
         assets: config.momAssets.join(','),
         duration: config.momDuration,
+        strategy: 'mom',
     });
-    logger.info(`MOM[SIM]: session started | balance $${config.simBalance.toFixed(2)} | assets: ${config.momAssets.join(', ').toUpperCase()} | ${config.momDuration}`);
+    if (config.dryRun) {
+        logger.info(`MOM[SIM]: session started | balance $${config.simBalance.toFixed(2)} | assets: ${config.momAssets.join(', ').toUpperCase()} | ${config.momDuration}`);
+    }
 }
 
 // ── Detector: uses same slug construction as mmDetector ───────────────────────
@@ -349,7 +352,7 @@ async function buildStatusContent() {
 
             const entryAtStr = pos.entrySecFromOpen != null ? ` | {gray-fg}entered @${pos.entrySecFromOpen}s{/gray-fg}` : '';
             rightLines.push(`  {cyan-fg}${assetTag}${label}{/cyan-fg}`);
-            rightLines.push(`  ${pos.side.toUpperCase()} | entry $${pos.entryPrice.toFixed(3)} | ${timeStr}${entryAtStr}`);
+            rightLines.push(`  ${pos.side.toUpperCase()} | entry $${pos.entryPrice.toFixed(3)} (${pos.shares.toFixed(2)}) | ${timeStr}${entryAtStr}`);
 
             const price = livePrices.get(pos.conditionId) || 0;
             if (price > 0) {
@@ -368,7 +371,6 @@ async function buildStatusContent() {
 }
 
 let refreshTimer = null;
-let redeemTimer = null;
 
 function startRefresh() {
     refreshTimer = setInterval(async () => {
@@ -379,32 +381,20 @@ function startRefresh() {
     buildStatusContent().then(updateStatus);
 }
 
-function startRedeemer() {
-    redeemMMPositions().catch((err) => logger.error('MOM redeemer error:', err.message));
-    redeemTimer = setInterval(
-        () => redeemMMPositions().catch((err) => logger.error('MOM redeemer error:', err.message)),
-        config.redeemInterval,
-    );
-}
-
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 
 async function shutdown() {
     logger.warn('MOM: shutting down...');
     stopDetector();
     if (refreshTimer) clearInterval(refreshTimer);
-    if (redeemTimer) clearInterval(redeemTimer);
-    if (config.dryRun) await waitForActivePositionsToClose();
-    await redeemMMPositions();
-    if (config.dryRun) {
-        const data = endSession();
-        if (data) {
-            try {
-                const path = writeSessionExcel(data);
-                logger.info(`MOM: session saved to ${path}`);
-            } catch (e) {
-                logger.error(`MOM: failed to write session Excel: ${e.message}`);
-            }
+    await waitForActivePositionsToClose();
+    const data = endSession();
+    if (data) {
+        try {
+            const path = writeSessionExcel(data);
+            logger.info(`MOM: session saved to ${path}`);
+        } catch (e) {
+            logger.error(`MOM: failed to write session Excel: ${e.message}`);
         }
     }
 }
@@ -416,5 +406,4 @@ process.on('SIGTERM', () => shutdown().then(() => process.exit(0)).catch((e) => 
 
 logger.info(`MOM bot starting — ${config.dryRun ? 'SIMULATION MODE' : 'LIVE MODE'} | assets: ${config.momAssets.join(', ').toUpperCase()} | ${config.momDuration}`);
 startRefresh();
-startRedeemer();
 startDetector();

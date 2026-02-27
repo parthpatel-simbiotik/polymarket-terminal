@@ -26,7 +26,7 @@ function nowIso() {
 export function startSession(startingBalance, opts = {}) {
     const bal = Number(startingBalance);
     if (Number.isNaN(bal) || bal < 0) throw new Error('startSession: startingBalance must be a non-negative number');
-    const { assets = '', duration = '' } = opts;
+    const { assets = '', duration = '', strategy = 'mm' } = opts;
     session = {
         id: new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19),
         startTime: nowIso(),
@@ -35,6 +35,7 @@ export function startSession(startingBalance, opts = {}) {
         balance: bal,
         assets: String(assets).replace(/,/g, '_') || 'btc',
         duration: String(duration) || '5m',
+        strategy: String(strategy),
         records: [],
         orders: [],
         positions: [],
@@ -225,9 +226,11 @@ export function writeSessionExcel(data, outputDir = DATA_DIR) {
     } catch {
         // ignore
     }
-    const assetsPart = data.assets ? `-${data.assets}` : '';
-    const durationPart = data.duration ? `-${data.duration}` : '';
-    const filename = `mm-sim${assetsPart}${durationPart}-${data.id}.xlsx`;
+    const isMom = data.strategy === 'mom';
+    const prefix = isMom ? 'mom' : 'mm';
+    const duration = data.duration || '5m';
+    const mode = data.startBalance > 0 ? 'sim' : 'live';
+    const filename = `${prefix}-${duration}-${mode}-${data.id}.xlsx`;
     const filepath = join(outputDir, filename);
     XLSX.writeFile(wb, filepath);
     return filepath;
