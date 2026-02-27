@@ -72,6 +72,29 @@ const config = {
   mmRecoveryThreshold: parseFloat(process.env.MM_RECOVERY_THRESHOLD || '0.70'), // min price to qualify
   mmRecoverySize:      parseFloat(process.env.MM_RECOVERY_SIZE      || '0'),    // 0 = use mmTradeSize
 
+  // ── Momentum Strategy (when one side fills, cancel other & trail/add) ───
+  mmMomentum:          process.env.MM_MOMENTUM_STRATEGY     === 'true',
+  mmMomentumMode:      process.env.MM_MOMENTUM_MODE        || 'trail',  // 'trail' | 'add'
+  mmMomentumLookback:  parseInt(process.env.MM_MOMENTUM_LOOKBACK  || '3', 10),
+  mmAddTarget:         parseFloat(process.env.MM_ADD_TARGET        || '0.70'),
+  mmTrailDropPct:      parseFloat(process.env.MM_TRAIL_DROP_PCT    || '0.05'),
+
+  // ── MM-Momentum (directional momentum strategy) ─────────────────
+  momAssets:          (process.env.MOM_ASSETS || process.env.MM_ASSETS || 'btc')
+                        .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+  momDuration:        process.env.MOM_DURATION || process.env.MM_DURATION || '5m',
+  momTradeSize:       parseFloat(process.env.MOM_TRADE_SIZE     || '5'),
+  momEntryThreshold:  parseFloat(process.env.MOM_ENTRY_THRESHOLD || '0.60'),
+  momExitTarget:      parseFloat(process.env.MOM_EXIT_TARGET     || '0.98'),
+  momEntryWindow:     parseInt(  process.env.MOM_ENTRY_WINDOW    || '45', 10),
+  momEntryPollMs:     parseInt(  process.env.MOM_ENTRY_POLL_MS   || '2000', 10),
+  momCutLossTime:     parseInt(  process.env.MOM_CUT_LOSS_TIME   || '30', 10),
+  momTrailEnabled:    process.env.MOM_TRAIL_ENABLED !== 'false',
+  momTrailDropPct:    parseFloat(process.env.MOM_TRAIL_DROP_PCT  || '0.05'),
+  momMinDepth:        parseFloat(process.env.MOM_MIN_DEPTH       || '0'),
+  momPollInterval:    parseInt(  process.env.MOM_POLL_INTERVAL   || '10', 10) * 1000,
+  momMaxPositions:    parseInt(  process.env.MOM_MAX_POSITIONS   || '1', 10),
+
   // ── Orderbook Sniper ───────────────────────────────────────────
   // Places tiny GTC limit BUY orders at a very low price on each side
   // of ETH/SOL/XRP 5-minute markets — catches panic dumps near $0.
@@ -106,6 +129,20 @@ export function validateMMConfig() {
   if (config.mmTradeSize <= 0) throw new Error('MM_TRADE_SIZE must be > 0');
   if (config.mmSellPrice <= 0 || config.mmSellPrice >= 1)
     throw new Error('MM_SELL_PRICE must be between 0 and 1');
+}
+
+// Validation for mm-momentum bot
+export function validateMomentumConfig() {
+  const required = ['privateKey', 'proxyWallet'];
+  const missing = required.filter((key) => !config[key]);
+  if (missing.length > 0) {
+    throw new Error(`Missing required config: ${missing.join(', ')}. Check your .env file.`);
+  }
+  if (config.momTradeSize <= 0) throw new Error('MOM_TRADE_SIZE must be > 0');
+  if (config.momEntryThreshold <= 0 || config.momEntryThreshold >= 1)
+    throw new Error('MOM_ENTRY_THRESHOLD must be between 0 and 1');
+  if (config.momExitTarget <= config.momEntryThreshold || config.momExitTarget > 1)
+    throw new Error('MOM_EXIT_TARGET must be > MOM_ENTRY_THRESHOLD and <= 1');
 }
 
 export default config;

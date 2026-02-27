@@ -141,6 +141,9 @@ async function buildStatusContent() {
     leftLines.push(`  Sell @   : $${config.mmSellPrice}`);
     leftLines.push(`  Cut loss : ${config.mmCutLossTime}s before close`);
     leftLines.push(`  Liq chk  : ${config.mmLiquidityCheck ? '{green-fg}ON{/green-fg}' : '{red-fg}OFF{/red-fg}'} (max imbal: ${config.mmMinLiquiditySpread})`);
+    if (config.mmMomentum) {
+        leftLines.push(`  Momentum : {cyan-fg}${config.mmMomentumMode.toUpperCase()}{/cyan-fg} (lookback ${config.mmMomentumLookback})`);
+    }
 
     // Right: Active positions
     const positions = getActiveMMPositions();
@@ -171,6 +174,21 @@ async function buildStatusContent() {
                 liqTag = ` {${liqColor}-fg}LIQ:${liqLabel}{/${liqColor}-fg}`;
             }
             rightLines.push(`  ${pos.status} | ${timeStr}${liqTag}`);
+
+            // Live prices
+            let yesLive = '', noLive = '';
+            try {
+                const client = getClient();
+                const [yesMp, noMp] = await Promise.all([
+                    client.getMidpoint(pos.yes.tokenId),
+                    client.getMidpoint(pos.no.tokenId),
+                ]);
+                yesLive = parseFloat(yesMp?.mid ?? yesMp ?? '0');
+                noLive = parseFloat(noMp?.mid ?? noMp ?? '0');
+            } catch { /* ignore */ }
+            if (yesLive > 0 || noLive > 0) {
+                rightLines.push(`  {gray-fg}live{/gray-fg} Y:$${(yesLive || 0).toFixed(3)} N:$${(noLive || 0).toFixed(3)}`);
+            }
 
             // YES side
             const yFill = pos.yes.filled

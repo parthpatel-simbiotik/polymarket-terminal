@@ -72,6 +72,8 @@ function parseArgs() {
         momentumMode: 'trail',  // 'add' | 'trail' (when strategy=momentum)
         momentumLookback: 3,    // snapshots to confirm momentum trend
         addTarget: 0.70,       // exit target for add mode (when strategy=momentum, momentumMode=add)
+        trailRealistic: true,   // false = optimistic look-ahead (inflated); true = real-time style trail
+        trailDropPct: 0.05,     // when trailRealistic: sell when bid drops 5% from local high
     };
 
     for (let i = 0; i < args.length; i++) {
@@ -97,6 +99,8 @@ function parseArgs() {
             case '--momentum-mode':  params.momentumMode = next; i++; break;
             case '--momentum-lookback': params.momentumLookback = parseInt(next, 10); i++; break;
             case '--add-target':     params.addTarget = parseFloat(next); i++; break;
+            case '--trail-realistic': params.trailRealistic = next !== 'false'; i++; break;
+            case '--trail-drop-pct':  params.trailDropPct = parseFloat(next); i++; break;
         }
     }
 
@@ -227,7 +231,7 @@ async function main() {
     logger.info(`Log file: ${logPath}`);
     logger.info(`Params: strategy=${params.strategy} sell=${params.sellPrice} cutLoss=${params.cutLossSeconds}s entry=${params.entryWindow}s imbalance=${params.maxImbalance} recovery=${params.recovery} limit=${params.limit || 'all'} rsi=${params.rsiMin}-${params.rsiMax} maxMacdHist=${params.maxMacdHist || 'off'}`);
     if (params.strategy === 'momentum') {
-        logger.info(`Momentum: mode=${params.momentumMode} lookback=${params.momentumLookback} addTarget=${params.addTarget}`);
+        logger.info(`Momentum: mode=${params.momentumMode} lookback=${params.momentumLookback} addTarget=${params.addTarget} trailRealistic=${params.trailRealistic} trailDropPct=${(params.trailDropPct * 100).toFixed(0)}%`);
     }
 
     // 1. Fetch all resolved markets
@@ -381,10 +385,16 @@ async function main() {
             } else {
                 runningPnl += result.pnl;
                 const exitLabel = EXIT_LABELS[result.exitType] || result.exitType;
+                const momDir = result.momentumDirection ? ` mom=${result.momentumDirection}` : '';
+                const fillSecStr = [result.yesFillSecondsFromStart, result.noFillSecondsFromStart]
+                    .filter((s) => s != null)
+                    .length > 0
+                    ? ` Y:${result.yesFillSecondsFromStart ?? '-'}s N:${result.noFillSecondsFromStart ?? '-'}s`
+                    : '';
                 const pnlStr = formatPnl(result.pnl);
                 const totalStr = formatPnl(runningPnl);
                 const logFn = result.pnl > 0 ? logger.money : result.pnl < 0 ? logger.warn : logger.info;
-                logFn(`${counter} ${slug} — ${exitLabel} ${pnlStr} | ${indStr}${maxPriceStr} | cumulative: ${totalStr} [${elapsed}]`);
+                logFn(`${counter} ${slug} — ${exitLabel}${momDir} ${pnlStr}${fillSecStr} | ${indStr}${maxPriceStr} | cumulative: ${totalStr} [${elapsed}]`);
             }
         } catch (err) {
             const elapsed = formatElapsed(Date.now() - t0);

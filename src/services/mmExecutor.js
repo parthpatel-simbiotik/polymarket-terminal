@@ -143,6 +143,32 @@ async function simPriceHitTarget(tokenId) {
     }
 }
 
+// Get best bid from orderbook (for momentum trail)
+async function getBestBid(tokenId) {
+    try {
+        const client = getClient();
+        const ob = await client.getOrderBook(tokenId);
+        const bids = ob?.bids || [];
+        if (bids.length === 0) return null;
+        let best = 0;
+        for (const b of bids) {
+            const p = parseFloat(b.price);
+            if (p > best) best = p;
+        }
+        return best > 0 ? best : null;
+    } catch {
+        return null;
+    }
+}
+
+// Check if momentum is one-sided: filled side's price trending up over lookback
+function isMomentumOneSided(priceHistory, lookback) {
+    if (!priceHistory || priceHistory.length < lookback + 1) return false;
+    const first = priceHistory[priceHistory.length - 1 - lookback];
+    const last = priceHistory[priceHistory.length - 1];
+    return last > first;
+}
+
 // ── Core monitoring loop ──────────────────────────────────────────────────────
 
 async function monitorAndManage(pos) {
@@ -155,6 +181,65 @@ async function monitorAndManage(pos) {
             logger.warn(`MM: market expired — ${label}`);
             pos.status = 'expired';
             break;
+        }
+
+        // ── Price history (for momentum check) ──────────────────
+        if (pos._priceHistory) {
+            try {
+                const client = getClient();
+                const [yesMp, noMp] = await Promise.all([
+                    client.getMidpoint(pos.yes.tokenId),
+                    client.getMidpoint(pos.no.tokenId),
+                ]);
+                const yesP = parseFloat(yesMp?.mid ?? yesMp ?? '0') || 0;
+                const noP = parseFloat(noMp?.mid ?? noMp ?? '0') || 0;
+                pos._priceHistory.yes.push(yesP);
+                pos._priceHistory.no.push(noP);
+                const maxLen = 10;
+                if (pos._priceHistory.yes.length > maxLen) pos._priceHistory.yes.shift();
+                if (pos._priceHistory.no.length > maxLen) pos._priceHistory.no.shift();
+            } catch { /* ignore */ }
+        }
+
+        // ── Momentum trail: sell unfilled when bid drops from high ──
+        if (pos._momentumTrail) {
+            const side = pos._momentumUnfilledSide;
+            const tokenId = pos[side].tokenId;
+            const bid = await getBestBid(tokenId);
+            if (bid != null) {
+                if (bid > pos._trailHighBid) pos._trailHighBid = bid;
+                const threshold = pos._trailHighBid * (1 - config.mmTrailDropPct);
+                if (pos._trailHighBid > 0 && bid < threshold) {
+                    logger.info(`MM${config.dryRun ? '[SIM]' : ''}: momentum trail — ${side.toUpperCase()} bid $${bid.toFixed(3)} < high*${(1 - config.mmTrailDropPct).toFixed(2)} → selling`);
+                    await cancelOrder(pos[side].orderId);
+                    const result = await marketSell(tokenId, pos[side].shares, pos.tickSize, pos.negRisk);
+                    pos[side].fillPrice = result.fillPrice;
+                    pos[side].filled = true;
+                    const pnl = (pos[side].fillPrice - pos[side].entryPrice) * pos[side].shares;
+                    logger.money(`MM${config.dryRun ? '[SIM]' : ''}: ${side.toUpperCase()} momentum trail sold @ $${pos[side].fillPrice.toFixed(3)} | P&L $${pnl.toFixed(2)}`);
+                    if (config.dryRun) {
+                        recordEvent({ type: 'momentum_trail_sell', amount: result.fillPrice * pos[side].shares, pnl, market: label, side: side.toUpperCase(), shares: pos[side].shares, price: result.fillPrice });
+                    }
+                    pos.status = 'done';
+                    pos._exitType = 'momentum_trail';
+                    break;
+                }
+            }
+            if (msRemaining <= config.mmCutLossTime * 1000) {
+                logger.warn(`MM: momentum trail cut-loss — ${side.toUpperCase()} selling at deadline`);
+                await cancelOrder(pos[side].orderId);
+                const result = await marketSell(tokenId, pos[side].shares, pos.tickSize, pos.negRisk);
+                pos[side].fillPrice = result.fillPrice;
+                pos[side].filled = true;
+                const pnl = (pos[side].fillPrice - pos[side].entryPrice) * pos[side].shares;
+                logger.warn(`MM: ${side.toUpperCase()} sold @ $${pos[side].fillPrice.toFixed(3)} | P&L $${pnl.toFixed(2)}`);
+                if (config.dryRun) recordEvent({ type: 'momentum_trail_cut', amount: result.fillPrice * pos[side].shares, pnl, market: label, side: side.toUpperCase() });
+                pos.status = 'done';
+                pos._exitType = 'momentum_trail';
+                break;
+            }
+            await sleep(config.mmPollInterval || 10_000);
+            continue;
         }
 
         // ── Check YES side ──────────────────────────────────────
@@ -238,8 +323,113 @@ async function monitorAndManage(pos) {
             break;
         }
 
+        // ── One filled + momentum: cancel other, trail or add ─────
+        const oneFilled = (pos.yes.filled && !pos.no.filled) || (!pos.yes.filled && pos.no.filled);
+        if (config.mmMomentum && oneFilled && pos._priceHistory && !pos._momentumTrail && !pos._momentumAdd) {
+            const yesFilled = pos.yes.filled;
+            const history = yesFilled ? pos._priceHistory.yes : pos._priceHistory.no;
+            const lookback = config.mmMomentumLookback || 3;
+            if (isMomentumOneSided(history, lookback)) {
+                const momDir = yesFilled ? 'YES' : 'NO';
+                const unfilledSide = yesFilled ? 'no' : 'yes';
+                logger.info(`MM${config.dryRun ? '[SIM]' : ''}: momentum confirmed (mom=${momDir}) — cancelling ${unfilledSide.toUpperCase()} limit`);
+                await cancelOrder(pos[unfilledSide].orderId);
+
+                if (config.mmMomentumMode === 'add') {
+                    const tokenId = pos[momDir.toLowerCase()].tokenId;
+                    const addSize = config.mmTradeSize;
+                    logger.trade(`MM${config.dryRun ? '[SIM]' : ''}: momentum add — buying ${momDir} @ market`);
+                    try {
+                        const mp = await getClient().getMidpoint(tokenId);
+                        const price = parseFloat(mp?.mid ?? mp ?? '0.60') || 0.60;
+                        if (config.dryRun) {
+                            pos._momentumAddShares = addSize / price;
+                            pos._momentumAddEntry = price;
+                            recordEvent({ type: 'momentum_add_buy', amount: -addSize, description: `add ${momDir}`, market: label, side: momDir, shares: pos._momentumAddShares, price });
+                        } else {
+                            const res = await getClient().createAndPostMarketOrder(
+                                { tokenID: tokenId, side: Side.BUY, amount: addSize, price: 0.99 },
+                                { tickSize: pos.tickSize, negRisk: pos.negRisk },
+                                OrderType.FOK,
+                            );
+                            if (res?.success) {
+                                pos._momentumAddShares = parseFloat(res.takingAmount || addSize / price);
+                                pos._momentumAddEntry = parseFloat(res.price || String(price));
+                                logger.money(`MM: momentum add filled ${pos._momentumAddShares.toFixed(3)} ${momDir} @ $${pos._momentumAddEntry.toFixed(3)}`);
+                            } else {
+                                pos._momentumAddShares = 0;
+                            }
+                        }
+                    } catch {
+                        pos._momentumAddShares = 0;
+                    }
+                    pos._momentumAdd = true;
+                    pos._momentumAddSide = momDir;
+                } else {
+                    pos._momentumTrail = true;
+                    pos._momentumUnfilledSide = unfilledSide;
+                    pos._trailHighBid = 0;
+                }
+            }
+        }
+
+        // ── Momentum add: monitor for add target or cut-loss ───────
+        if (pos._momentumAdd && (!pos._momentumAddShares || pos._momentumAddShares <= 0)) {
+            const unfilledSide = pos._momentumAddSide === 'YES' ? 'no' : 'yes';
+            logger.warn(`MM: momentum add failed — selling ${unfilledSide.toUpperCase()}`);
+            await cancelOrder(pos[unfilledSide].orderId);
+            const result = await marketSell(pos[unfilledSide].tokenId, pos[unfilledSide].shares, pos.tickSize, pos.negRisk);
+            pos[unfilledSide].fillPrice = result.fillPrice;
+            pos[unfilledSide].filled = true;
+            pos.status = 'done';
+            pos._exitType = 'momentum_add';
+            pos._momentumAdd = false;
+            break;
+        }
+        if (pos._momentumAdd && pos._momentumAddShares > 0) {
+            const side = pos._momentumAddSide.toLowerCase();
+            const tokenId = pos[side].tokenId;
+            const target = config.mmAddTarget || 0.70;
+            try {
+                const mp = await getClient().getMidpoint(tokenId);
+                const price = parseFloat(mp?.mid ?? mp ?? '0') || 0;
+                if (price >= target) {
+                    const addPnl = (target - pos._momentumAddEntry) * pos._momentumAddShares;
+                    pos[side].fillPrice = (pos[side].fillPrice || config.mmSellPrice);
+                    logger.money(`MM[SIM]: momentum add exit @ $${target.toFixed(2)} | add P&L $${addPnl.toFixed(2)}`);
+                    recordEvent({ type: 'momentum_add_sell', amount: target * pos._momentumAddShares, pnl: addPnl, market: label, side: pos._momentumAddSide, shares: pos._momentumAddShares, price: target });
+                    pos._momentumAddShares = 0;
+                }
+            } catch { /* ignore */ }
+            if (msRemaining <= config.mmCutLossTime * 1000) {
+                try {
+                    const mp = await getClient().getMidpoint(tokenId);
+                    const price = parseFloat(mp?.mid ?? mp ?? '0') || pos._momentumAddEntry;
+                    const addPnl = (price - pos._momentumAddEntry) * pos._momentumAddShares;
+                    logger.warn(`MM[SIM]: momentum add cut @ $${price.toFixed(3)} | add P&L $${addPnl.toFixed(2)}`);
+                    recordEvent({ type: 'momentum_add_cut', amount: price * pos._momentumAddShares, pnl: addPnl, market: label, side: pos._momentumAddSide });
+                } catch { /* ignore */ }
+                pos._momentumAddShares = 0;
+            }
+            if (pos._momentumAddShares <= 0) {
+                pos._momentumAdd = false;
+                // Still need to sell the original unfilled side
+                const unfilledSide = side === 'yes' ? 'no' : 'yes';
+                if (!pos[unfilledSide].filled) {
+                    logger.warn(`MM: momentum add done — market-selling ${unfilledSide.toUpperCase()}`);
+                    await cancelOrder(pos[unfilledSide].orderId);
+                    const result = await marketSell(pos[unfilledSide].tokenId, pos[unfilledSide].shares, pos.tickSize, pos.negRisk);
+                    pos[unfilledSide].fillPrice = result.fillPrice;
+                    pos[unfilledSide].filled = true;
+                    pos.status = 'done';
+                    pos._exitType = 'momentum_add';
+                    break;
+                }
+            }
+        }
+
         // ── Cut-loss time ───────────────────────────────────────
-        if (msRemaining <= config.mmCutLossTime * 1000) {
+        if (msRemaining <= config.mmCutLossTime * 1000 && !pos._momentumTrail && !pos._momentumAdd) {
             logger.warn(`MM: cut-loss triggered (${Math.round(msRemaining / 1000)}s left) — ${label}`);
             pos.status = 'cutting';
             await cutLoss(pos);
@@ -643,6 +833,7 @@ export async function executeMMStrategy(market) {
         enteredAt: new Date().toISOString(),
         entryYesMid: entryYesMid || yesMidAtEntry,
         entryNoMid: entryNoMid || noMidAtEntry,
+        _priceHistory: config.mmMomentum ? { yes: [], no: [] } : null,
         yes: {
             tokenId: yesTokenId,
             shares,

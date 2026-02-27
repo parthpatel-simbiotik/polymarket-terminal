@@ -62,7 +62,8 @@ function toTimestamp(value) {
  *
  * @param {object} market - Market metadata
  * @param {Array} snapshots - Sorted snapshots
- * @param {object} params - Strategy params + momentumMomentumMode, momentumLookback, addTarget
+ * @param {object} params - Strategy params + momentumMode, momentumLookback, addTarget, trailRealistic
+ * @param {boolean} [params.trailRealistic=false] - If true, trail simulates real-time: sell when bid drops X% from high (no look-ahead)
  * @returns {object} result
  */
 export function simulateMarketMomentum(market, snapshots, params) {
@@ -71,6 +72,8 @@ export function simulateMarketMomentum(market, snapshots, params) {
         momentumMode = 'trail',      // 'add' | 'trail'
         momentumLookback = 3,
         addTarget = 0.70,
+        trailRealistic = true,      // false = optimistic look-ahead (max bid); true = sell when bid drops from peak
+        trailDropPct = 0.05,        // when trailRealistic: sell when bid drops 5% from local high
     } = params;
 
     // Run base MM sim first to get fills — we'll override exit logic for one-filled + momentum case
@@ -169,20 +172,41 @@ export function simulateMarketMomentum(market, snapshots, params) {
         }
         result.pnl = result.yesPnl + result.noPnl;
         result.exitType = 'momentum_add';
+        result.momentumDirection = yesFilled ? 'YES' : 'NO';
     } else {
-        // Trail profit on unfilled side: sell at best achievable price in remaining window (before cut-loss)
-        let bestBid = 0;
+        // Trail profit on unfilled side
         const preCutLoss = remaining.filter((s) => toTimestamp(s.time) < cutLossTime);
-        for (const snap of preCutLoss) {
-            const ob = yesFilled ? snap.orderbook_up : snap.orderbook_down;
-            const bid = getBestBid(ob);
-            if (bid != null && bid > bestBid) bestBid = bid;
-        }
+        let trailExitPrice;
 
-        const lastPreCut = preCutLoss.length > 0 ? preCutLoss[preCutLoss.length - 1] : null;
-        const trailExitPrice = bestBid > 0 ? bestBid : (yesFilled
-            ? parseFloat(lastPreCut?.price_up) || 0
-            : parseFloat(lastPreCut?.price_down) || 0);
+        if (trailRealistic) {
+            // Realistic: sequential scan, sell when bid drops trailDropPct from running high (simulates real-time)
+            let highBid = 0;
+            for (const snap of preCutLoss) {
+                const ob = yesFilled ? snap.orderbook_up : snap.orderbook_down;
+                const bid = getBestBid(ob) ?? 0;
+                if (bid > highBid) highBid = bid;
+                const threshold = highBid * (1 - trailDropPct);
+                if (highBid > 0 && bid < threshold) {
+                    trailExitPrice = bid;
+                    break;
+                }
+            }
+            if (trailExitPrice == null) {
+                const lastPreCut = preCutLoss[preCutLoss.length - 1];
+                trailExitPrice = getBestBid(yesFilled ? lastPreCut?.orderbook_up : lastPreCut?.orderbook_down)
+                    ?? (yesFilled ? parseFloat(lastPreCut?.price_up) : parseFloat(lastPreCut?.price_down)) ?? 0;
+            }
+        } else {
+            // Optimistic (look-ahead): pick max bid across all snapshots — NOT achievable in real time
+            let bestBid = 0;
+            for (const snap of preCutLoss) {
+                const ob = yesFilled ? snap.orderbook_up : snap.orderbook_down;
+                const bid = getBestBid(ob);
+                if (bid != null && bid > bestBid) bestBid = bid;
+            }
+            const lastPreCut = preCutLoss[preCutLoss.length - 1];
+            trailExitPrice = bestBid > 0 ? bestBid : (yesFilled ? parseFloat(lastPreCut?.price_up) : parseFloat(lastPreCut?.price_down)) ?? 0;
+        }
 
         if (yesFilled) {
             result.yesPnl = (sellPrice - entryPrice) * shares;
@@ -197,6 +221,7 @@ export function simulateMarketMomentum(market, snapshots, params) {
         }
         result.pnl = result.yesPnl + result.noPnl;
         result.exitType = 'momentum_trail';
+        result.momentumDirection = yesFilled ? 'YES' : 'NO';
     }
 
     return result;

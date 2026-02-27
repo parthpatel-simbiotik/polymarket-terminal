@@ -165,6 +165,8 @@ export function simulateMarket(market, snapshots, params) {
     result.noFillPrice = noFillPrice;
     result.yesFillTime = yesFillTime;
     result.noFillTime = noFillTime;
+    result.yesFillSecondsFromStart = yesFilled && yesFillTime != null ? toTimestamp(yesFillTime) - startTime : null;
+    result.noFillSecondsFromStart = noFilled && noFillTime != null ? toTimestamp(noFillTime) - startTime : null;
 
     // 6. Determine exit
     if (yesFilled && noFilled) {

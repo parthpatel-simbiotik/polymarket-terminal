@@ -29,7 +29,18 @@
     "sniper-sim": "cross-env DRY_RUN=true node src/sniper.js",
     "sniper-dev": "cross-env DRY_RUN=true nodemon --ignore data/*.json src/sniper.js",
     "mm-backtest-5m": "node src/backtest/mmBacktest.js --duration 5m",
-    "mm-backtest-15m": "node src/backtest/mmBacktest.js --duration 15m"
+    "mm-backtest-15m": "node src/backtest/mmBacktest.js --duration 15m",
+    "mom": "cross-env DRY_RUN=false node src/mmMomentum.js",
+    "mom-sim": "cross-env DRY_RUN=true node src/mmMomentum.js",
+    "mom-sim-5m": "cross-env DRY_RUN=true MOM_DURATION=5m node src/mmMomentum.js",
+    "mom-sim-15m": "cross-env DRY_RUN=true MOM_DURATION=15m node src/mmMomentum.js",
+    "mom-sim-5m-btc": "cross-env DRY_RUN=true MOM_DURATION=5m MOM_ASSETS=btc node src/mmMomentum.js",
+    "mom-sim-5m-eth": "cross-env DRY_RUN=true MOM_DURATION=5m MOM_ASSETS=eth node src/mmMomentum.js",
+    "mom-sim-5m-all": "cross-env DRY_RUN=true MOM_DURATION=5m MOM_ASSETS=btc,eth,sol,xrp node src/mmMomentum.js",
+    "mom-sim-15m-btc": "cross-env DRY_RUN=true MOM_DURATION=15m MOM_ASSETS=btc node src/mmMomentum.js",
+    "mom-sim-15m-all": "cross-env DRY_RUN=true MOM_DURATION=15m MOM_ASSETS=btc,eth,sol,xrp node src/mmMomentum.js",
+    "mom-backtest-5m": "node src/backtest/mmMomentumBacktest.js --duration 5m",
+    "mom-backtest-15m": "node src/backtest/mmMomentumBacktest.js --duration 15m"
   },
   "keywords": [
     "polymarket",

@@ -146,6 +146,7 @@ export function writeBacktestExcel(results, summary, duration, outputDir = DATA_
             'maxPriceUp', 'maxPriceDown',
             'yesFilled', 'noFilled', 'yesFillPrice', 'noFillPrice',
             'yesFillTime', 'noFillTime',
+            'yesFillSecondsFromStart', 'noFillSecondsFromStart',
             'exitType', 'exitPriceUp', 'exitPriceDown',
             'yesPnl', 'noPnl', 'pnl',
             'orderbookDepthAtEntry',
